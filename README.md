@@ -61,6 +61,22 @@ python claude_usage_web.py --theme amber    # 指定預設配色
 Token 每次輪詢都會重讀，CLI 換發之後會自動跟上。程式本身不會把任何憑證寫進檔案或送去別的地方，
 只拿來呼叫官方端點。
 
+### Token 過期
+
+兩邊的 access token 都有效期（Claude 大約幾小時到一天）。這支程式**只讀不換發** —— 換發是 CLI
+在用的時候才會做的事。所以如果隔一陣子沒開過 CLI，token 過期後對應那一欄就會變成錯誤。
+
+解法是跑一下 CLI 讓它換發：
+
+```bash
+claude          # 或 codex
+```
+
+換發完不用重開儀表板，下一次輪詢就會自己跟上。
+
+用 `--claude-token` / `--codex-token` 手動指定的話沒有這個自動跟上的機制 —— 那組字串是寫死的，
+過期就得自己換。長期跑建議讓它走自動偵測。
+
 ## 說明
 
 - Claude 那邊是送一個 `max_tokens: 1` 的極小請求，讀回應 header 裡的
