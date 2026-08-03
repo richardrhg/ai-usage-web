@@ -508,6 +508,7 @@ PAGE = r"""<!DOCTYPE html>
   }
   .screen{
     width:min(560px,100%);
+    position:relative; overflow:hidden;
     border:3px solid var(--frame); border-radius:18px;
     background:linear-gradient(180deg, var(--panel-a), var(--panel-b));
     box-shadow:0 0 0 6px var(--halo), 0 24px 60px var(--drop),
@@ -539,13 +540,16 @@ PAGE = r"""<!DOCTYPE html>
   .row:last-child{margin-bottom:6px}
   .row-top{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:9px}
   .label{font-size:11px;color:var(--label);line-height:1.6}
-  .pct{font-size:26px;line-height:1;text-shadow:0 0 10px rgba(var(--acc-glow), calc(var(--glow-a) * .5))}
+  /* min-width 是給數字滾動用的:2% 跑到 100% 位數會變,先卡住寬度才不會抖 */
+  .pct{font-size:26px;line-height:1;min-width:4.4ch;text-align:right;
+    text-shadow:0 0 10px rgba(var(--acc-glow), calc(var(--glow-a) * .5))}
   .track{
     height:13px;border:2px solid var(--acc-edge);border-radius:3px;
     background:var(--acc-track);overflow:hidden;
   }
   .fill{
     height:100%;width:0%;transition:width .5s steps(20,end);
+    position:relative; overflow:hidden;
     background:linear-gradient(180deg,var(--acc-hi),var(--acc));
     box-shadow:0 0 12px rgba(var(--acc-glow), calc(var(--glow-a) * .7));
   }
@@ -593,10 +597,86 @@ PAGE = r"""<!DOCTYPE html>
     border:2px solid var(--edge);border-radius:4px;padding:6px 9px;cursor:pointer;
   }
   .btn:hover{color:var(--ink);border-color:var(--p1)}
+  .btn:active{transform:translateY(1px)}
+  .btn.busy{color:var(--ink);border-color:var(--p1)}
+
+  /* ── 動畫 ──────────────────────────────────────────────────
+     全部集中在這一段。整段被 prefers-reduced-motion 關掉之後畫面只是
+     變靜態,數值和版面都不受影響。 */
+
+  /* CRT 開機:第一次載入時螢幕從一條水平線撐開,再閃兩下 */
+  @keyframes crt-on{
+    0%  {opacity:0;  transform:scaleY(.004); filter:brightness(3)}
+    30% {opacity:1;  transform:scaleY(.004); filter:brightness(3)}
+    50% {opacity:1;  transform:scaleY(1.05); filter:brightness(1.8)}
+    65% {opacity:.65;transform:scaleY(1);    filter:brightness(1)}
+    75% {opacity:1}
+    85% {opacity:.8}
+    100%{opacity:1;  transform:scaleY(1);    filter:brightness(1)}
+  }
+  .screen.boot{animation:crt-on .8s ease-out both}
+
+  /* 換主題時整台機器閃一下,像換頻道 */
+  @keyframes crt-flick{
+    0%,100%{filter:none}
+    25%{filter:brightness(1.55) saturate(1.25)}
+    50%{filter:brightness(.78)}
+    75%{filter:brightness(1.25)}
+  }
+  .screen.flick{animation:crt-flick .3s steps(8,end)}
+
+  /* 掃描線:一條淡光從上到下慢慢掃過整個畫面 */
+  @keyframes sweep{
+    0%  {transform:translateY(-100%)}
+    100%{transform:translateY(760px)}
+  }
+  .sweep{
+    position:absolute;left:0;right:0;top:0;height:52px;pointer-events:none;z-index:2;
+    background:linear-gradient(180deg, transparent,
+      rgba(var(--p1-glow), calc(var(--glow-a) * .11)), transparent);
+    animation:sweep 7.5s linear infinite;
+  }
+
+  /* 進度條表面的流光,只在已填滿的區段內跑(靠 .fill 的 overflow 裁掉) */
+  @keyframes sheen{
+    0%      {transform:translateX(-160%)}
+    55%,100%{transform:translateX(420%)}
+  }
+  .fill::after{
+    content:"";position:absolute;top:0;bottom:0;left:0;width:38%;
+    background:linear-gradient(100deg, transparent,
+      rgba(255,255,255,calc(var(--glow-a) * .5)), transparent);
+    animation:sheen 2.8s ease-in-out infinite;
+  }
+
+  /* 進到 90% 以上,條子自己會急促地脈動 */
+  @keyframes crit-pulse{
+    0%,100%{box-shadow:0 0 8px rgba(255,90,90,calc(var(--glow-a) * .5))}
+    50%    {box-shadow:0 0 22px rgba(255,90,90,calc(var(--glow-a) * .95)),
+                       0 0 36px rgba(255,90,90,calc(var(--glow-a) * .45))}
+  }
+  .fill.crit{animation:crit-pulse 1.1s ease-in-out infinite}
+
+  /* 首次載入時每一列往上浮出來,--d 由 JS 逐列遞增 */
+  @keyframes row-in{
+    from{opacity:0;transform:translateY(7px)}
+    to  {opacity:1;transform:none}
+  }
+  .intro .row{animation:row-in .45s ease-out both;animation-delay:var(--d,0ms)}
+
+  /* 抓資料的時候呼吸燈變急促。放在 .bad 後面,兩個都中時以 busy 為準 */
+  .dot.busy{animation-duration:.5s}
+
+  @media (prefers-reduced-motion:reduce){
+    .screen.boot,.screen.flick,.intro .row,.fill.crit{animation:none}
+    .sweep,.fill::after{display:none}
+    .fill{transition:none}
+  }
 </style>
 </head>
 <body>
-<div class="screen">
+<div class="screen" id="screen">
+  <div class="sweep"></div>
   <div id="panels"></div>
   <footer>
     <span class="dot" id="dot"></span>
@@ -619,12 +699,26 @@ const THEMES = [
 ];
 const THEME_KEY = "ai-usage-theme";
 
+const REDUCED = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+// 重新觸發一個一次性的 CSS 動畫:先移除 class,強制 reflow,再加回去。
+function replay(el, cls, ms){
+  el.classList.remove(cls);
+  void el.offsetWidth;
+  el.classList.add(cls);
+  setTimeout(() => el.classList.remove(cls), ms);
+}
+
 function applyTheme(id, save){
   const t = THEMES.find(x => x.id === id) || THEMES[0];
   document.documentElement.setAttribute("data-theme", t.id);
   document.querySelectorAll(".sw").forEach(b =>
     b.setAttribute("aria-pressed", String(b.dataset.theme === t.id)));
-  if (save) { try { localStorage.setItem(THEME_KEY, t.id); } catch(e){} }
+  // save 為真代表是使用者按的,才閃;開場套用已存主題時不閃。
+  if (save) {
+    if (!REDUCED) replay(document.getElementById("screen"), "flick", 320);
+    try { localStorage.setItem(THEME_KEY, t.id); } catch(e){}
+  }
 }
 
 function buildSwatches(){
@@ -661,11 +755,17 @@ function fmtCountdown(sec){
 }
  
 let last = null;
- 
+
+// 每次輪詢都是整段 innerHTML 重寫,新元素一出生就是最終寬度,
+// 所以 .fill 的 transition 永遠不會播。這裡記住上一輪的數值,
+// 讓新的條子先長在舊位置,插進 DOM 之後再推到新值,過渡才跑得起來。
+const prevPct = new Map();
+let rowSeq = 0;
+
 function renderPanel(p){
   const now = Math.floor(Date.now()/1000);
   let inner;
- 
+
   if (!p.ok){
     inner = '<div class="perr">' + esc(p.error || "未知錯誤") + '</div>';
   } else {
@@ -673,10 +773,16 @@ function renderPanel(p){
       const pct = Math.max(0, Math.min(100, w.percent));
       const cls = pct >= 90 ? "crit" : pct >= 70 ? "warn" : "";
       const left = fmtCountdown(w.reset_epoch ? w.reset_epoch - now : null);
-      return '<div class="row">'
+      const key = p.id + "|" + w.label;
+      const from = prevPct.has(key) ? prevPct.get(key) : 0;
+      prevPct.set(key, pct);
+      const delay = (rowSeq++) * 70;
+      return '<div class="row" style="--d:' + delay + 'ms">'
         + '<div class="row-top"><div class="label">' + esc(w.label) + '</div>'
-        + '<div class="pct">' + pct.toFixed(0) + '%</div></div>'
-        + '<div class="track"><div class="fill ' + cls + '" style="width:' + pct + '%"></div></div>'
+        + '<div class="pct" data-from="' + from + '" data-to="' + pct + '">'
+        + from.toFixed(0) + '%</div></div>'
+        + '<div class="track"><div class="fill ' + cls + '" style="width:' + from
+        + '%" data-to="' + pct + '"></div></div>'
         + (left ? '<div class="reset">Resets in ' + left + '</div>' : '')
         + '</div>';
     }).join("");
@@ -688,13 +794,48 @@ function renderPanel(p){
     + inner + '</div>';
 }
  
+// 數字從舊值滾到新值,整數跳,配合像素字體。
+function countUp(el, from, to){
+  if (REDUCED || from === to){ el.textContent = to.toFixed(0) + "%"; return; }
+  const dur = 620, t0 = performance.now();
+  (function step(t){
+    const k = Math.min(1, (t - t0) / dur);
+    const eased = 1 - Math.pow(1 - k, 3);
+    el.textContent = Math.round(from + (to - from) * eased) + "%";
+    if (k < 1) requestAnimationFrame(step);
+  })(t0);
+}
+
+// 等元素進到 DOM 之後才推寬度,不然瀏覽器會把兩次賦值合併成一次。
+function playBars(root){
+  root.querySelectorAll(".pct[data-to]").forEach(el =>
+    countUp(el, +el.dataset.from, +el.dataset.to));
+  requestAnimationFrame(() => {
+    root.querySelectorAll(".fill[data-to]").forEach(el => {
+      el.style.width = el.dataset.to + "%";
+    });
+  });
+}
+
+let firstRender = true;
+
 function render(data){
   last = data;
   const providers = data.providers || [];
-  document.getElementById("panels").innerHTML =
+  const host = document.getElementById("panels");
+  rowSeq = 0;
+  host.innerHTML =
     providers.length ? providers.map(renderPanel).join("")
                      : '<div class="perr">尚未取得任何資料</div>';
- 
+
+  // 逐列浮出只在第一次做,之後每 15 秒再來一次會很吵。
+  if (firstRender && !REDUCED){
+    host.classList.add("intro");
+    setTimeout(() => host.classList.remove("intro"), 1600);
+  }
+  firstRender = false;
+  playBars(host);
+
   const anyBad = !providers.length || providers.some(p => !p.ok);
   document.getElementById("dot").classList.toggle("bad", anyBad);
   tickAge();
@@ -709,18 +850,27 @@ function tickAge(){
   el.textContent = (bad ? bad + " ERROR" : "OK") + "  (" + age + "s ago)";
 }
  
+function setBusy(b){
+  document.getElementById("dot").classList.toggle("busy", b);
+  document.getElementById("refresh").classList.toggle("busy", b);
+}
+
 async function load(force){
+  setBusy(true);
   try {
     const r = await fetch("/api/usage" + (force ? "?refresh=1" : ""));
     render(await r.json());
   } catch (e) {
     document.getElementById("status").textContent = "伺服器沒回應";
     document.getElementById("dot").classList.add("bad");
+  } finally {
+    setBusy(false);
   }
 }
- 
+
 document.getElementById("refresh").addEventListener("click", () => load(true));
 
+if (!REDUCED) replay(document.getElementById("screen"), "boot", 900);
 buildSwatches();
 let saved = null;
 try { saved = localStorage.getItem(THEME_KEY); } catch(e){}
