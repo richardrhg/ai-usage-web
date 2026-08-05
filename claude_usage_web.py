@@ -59,6 +59,16 @@ CLAUDE_WINDOW_LABELS = {
     "7d-opus": "Opus (7d)",
     "7d-fable": "Fable (7d)",
 }
+# label 是給 --once 的文字輸出和舊前端當後備用的;網頁真正拿去翻譯的是這裡的
+# (kind, win)。kind 對到 I18N 的字典鍵,win 是「5h」這種長度標記,兩種語言共用。
+CLAUDE_WINDOW_META = {
+    "5h": ("session", "5h"),
+    "7d": ("weekly", "7d"),
+    "7d-oauth": ("weekly", "7d"),
+    "7d-opus": ("opus", "7d"),
+    "7d-fable": ("fable", "7d"),
+}
+CODEX_WINDOW_KINDS = {"session", "weekly", "monthly"}
 CLAUDE_WINDOW_ORDER = ["5h", "7d", "7d-oauth", "7d-opus", "7d-fable"]
 UTIL_RE = re.compile(r"^anthropic-ratelimit-unified-(.+)-utilization$", re.I)
 
@@ -155,7 +165,8 @@ def fetch_claude(token_override=None):
     token, source = (token_override, "--claude-token") if token_override else claude_token()
     if not token:
         return provider_error("claude", "Claude",
-                              "找不到憑證。裝好 Claude Code 後跑一次 `claude` 登入")
+                              "找不到憑證。裝好 Claude Code 後跑一次 `claude` 登入",
+                              "no_cred_claude")
  
     body = json.dumps({
         "model": ANTHROPIC_PROBE_MODEL,
@@ -175,7 +186,7 @@ def fetch_claude(token_override=None):
             },
         )
     except Exception as exc:
-        return provider_error("claude", "Claude", f"連線失敗: {exc}")
+        return provider_error("claude", "Claude", f"連線失敗: {exc}", "connect", str(exc))
  
     lower = {k.lower(): v for k, v in headers.items()}
     windows = {}
@@ -188,16 +199,20 @@ def fetch_claude(token_override=None):
             pct = float(value) * 100.0
         except (TypeError, ValueError):
             continue
+        kind, win = CLAUDE_WINDOW_META.get(slug, (None, None))
         windows[slug] = {
             "label": CLAUDE_WINDOW_LABELS.get(slug, slug.upper()),
+            "kind": kind, "win": win,
             "percent": round(pct, 1),
             "reset_epoch": to_epoch(lower.get(f"anthropic-ratelimit-unified-{slug}-reset")),
         }
  
     if not windows:
-        msg = ("憑證無效或已過期,重跑一次 `claude` 登入" if status == 401
-               else f"回應沒有用量 header (HTTP {status})")
-        return provider_error("claude", "Claude", msg)
+        if status == 401:
+            return provider_error("claude", "Claude",
+                                  "憑證無效或已過期,重跑一次 `claude` 登入", "expired_claude")
+        return provider_error("claude", "Claude",
+                              f"回應沒有用量 header (HTTP {status})", "no_headers", status)
  
     ordered = [windows.pop(k) for k in CLAUDE_WINDOW_ORDER if k in windows]
     ordered += [windows[k] for k in sorted(windows)]
@@ -261,8 +276,10 @@ def _codex_window(raw, name, derive=False):
     reset = to_epoch(raw.get("reset_at") or raw.get("resetAt"))
     if reset is None and isinstance(raw.get("reset_after_seconds"), (int, float)):
         reset = int(time.time() + raw["reset_after_seconds"])
+    kind = name.lower() if name.lower() in CODEX_WINDOW_KINDS else None
     return {
         "label": f"{name} ({win})" if win else name,
+        "kind": kind, "win": win,
         "percent": round(max(0.0, min(100.0, float(pct))), 1),
         "reset_epoch": reset,
     }
@@ -278,7 +295,8 @@ def fetch_codex(token_override=None):
  
     if not token:
         return provider_error("codex", "Codex",
-                              "找不到憑證。裝好 Codex CLI 後跑一次 `codex` 登入")
+                              "找不到憑證。裝好 Codex CLI 後跑一次 `codex` 登入",
+                              "no_cred_codex")
  
     headers = {"authorization": f"Bearer {token}", "accept": "application/json",
                "user-agent": "ai-usage-web/1.0"}
@@ -288,17 +306,18 @@ def fetch_codex(token_override=None):
     try:
         status, _, raw = http_json(CODEX_ENDPOINT, headers=headers)
     except Exception as exc:
-        return provider_error("codex", "Codex", f"連線失敗: {exc}")
+        return provider_error("codex", "Codex", f"連線失敗: {exc}", "connect", str(exc))
  
     if status == 401:
-        return provider_error("codex", "Codex", "憑證已過期,開一次 Codex CLI 讓它更新")
+        return provider_error("codex", "Codex",
+                              "憑證已過期,開一次 Codex CLI 讓它更新", "expired_codex")
     if status >= 400:
-        return provider_error("codex", "Codex", f"端點回應 HTTP {status}")
+        return provider_error("codex", "Codex", f"端點回應 HTTP {status}", "http", status)
  
     try:
         data = json.loads(raw)
     except Exception:
-        return provider_error("codex", "Codex", "回應不是合法 JSON")
+        return provider_error("codex", "Codex", "回應不是合法 JSON", "bad_json")
  
     rl = data.get("rate_limit") or {}
     windows = [w for w in (_codex_window(rl.get("primary_window"), "Session", derive=True),
@@ -312,7 +331,7 @@ def fetch_codex(token_override=None):
             windows.append(w)
  
     if not windows:
-        return provider_error("codex", "Codex", "回應裡沒有用量資料")
+        return provider_error("codex", "Codex", "回應裡沒有用量資料", "no_usage")
  
     plan = ((data.get("credits") or {}).get("plan") or data.get("plan_type") or "")
     return {"id": "codex", "name": "Codex", "ok": True, "error": None,
@@ -321,21 +340,32 @@ def fetch_codex(token_override=None):
  
 # ═════════════════════════════════════════════ 輪詢
  
-def provider_error(pid, name, message):
-    return {"id": pid, "name": name, "ok": False, "error": message, "windows": []}
+def provider_error(pid, name, message, code=None, arg=None):
+    """message 是中文原句,網頁沒有對應翻譯時就直接顯示它。
+
+    code / arg 是給前端 i18n 用的:code 對到 I18N 的 err 字典,arg 是要塞進去的
+    變數(例外訊息、HTTP 狀態碼)。多送這兩個欄位不影響任何舊的取用方式。
+    """
+    return {"id": pid, "name": name, "ok": False, "error": message,
+            "code": code, "arg": arg, "windows": []}
  
  
 def demo_providers():
     now = int(time.time())
     return [
         {"id": "claude", "name": "Claude", "ok": True, "error": None, "source": "demo", "windows": [
-            {"label": "Session (5h)", "percent": 12.0, "reset_epoch": now + 4 * 3600 + 30 * 60},
-            {"label": "Weekly (7d)", "percent": 23.0, "reset_epoch": now + 5 * 86400},
-            {"label": "Fable (7d)", "percent": 32.0, "reset_epoch": now + 5 * 86400},
+            {"label": "Session (5h)", "kind": "session", "win": "5h",
+             "percent": 12.0, "reset_epoch": now + 4 * 3600 + 30 * 60},
+            {"label": "Weekly (7d)", "kind": "weekly", "win": "7d",
+             "percent": 23.0, "reset_epoch": now + 5 * 86400},
+            {"label": "Fable (7d)", "kind": "fable", "win": "7d",
+             "percent": 32.0, "reset_epoch": now + 5 * 86400},
         ]},
         {"id": "codex", "name": "Codex", "ok": True, "error": None, "source": "demo", "windows": [
-            {"label": "Session (5h)", "percent": 74.0, "reset_epoch": now + 2 * 3600 + 10 * 60},
-            {"label": "Weekly (7d)", "percent": 91.0, "reset_epoch": now + 3 * 86400},
+            {"label": "Session (5h)", "kind": "session", "win": "5h",
+             "percent": 74.0, "reset_epoch": now + 2 * 3600 + 10 * 60},
+            {"label": "Weekly (7d)", "kind": "weekly", "win": "7d",
+             "percent": 91.0, "reset_epoch": now + 3 * 86400},
         ]},
     ]
  
@@ -373,7 +403,8 @@ class Poller:
                     results[pid] = (fetch_claude(self.args.claude_token) if pid == "claude"
                                     else fetch_codex(self.args.codex_token))
                 except Exception as exc:
-                    results[pid] = provider_error(pid, pid.title(), f"未預期錯誤: {exc}")
+                    results[pid] = provider_error(pid, pid.title(), f"未預期錯誤: {exc}",
+                                                  "unexpected", str(exc))
  
             for pid in wanted:
                 t = threading.Thread(target=run, args=(pid,))
@@ -407,11 +438,16 @@ PAGE = r"""<!DOCTYPE html>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
 <script>
-  // 在畫面畫出來之前先套主題,避免載入時閃一下預設色。
+  // 在畫面畫出來之前先套主題和語言,避免載入時閃一下預設值。
   (function(){
-    var t = null;
+    var d = document.documentElement, t = null, l = null;
     try { t = localStorage.getItem("ai-usage-theme"); } catch(e){}
-    document.documentElement.setAttribute("data-theme", t || "__DEFAULT_THEME__");
+    try { l = localStorage.getItem("ai-usage-lang"); } catch(e){}
+    // 沒選過就看瀏覽器語言,中文環境直接給中文。
+    if (!l) l = /^zh\b/i.test(navigator.language || "") ? "zh" : "en";
+    d.setAttribute("data-theme", t || "__DEFAULT_THEME__");
+    d.setAttribute("data-lang", l);
+    d.setAttribute("lang", l === "zh" ? "zh-Hant" : "en");
   })();
 </script>
 <style>
@@ -672,6 +708,17 @@ PAGE = r"""<!DOCTYPE html>
     .sweep,.fill::after{display:none}
     .fill{transition:none}
   }
+
+  /* ── 中文字級 ──────────────────────────────────────────────
+     Press Start 2P 只有拉丁字母,中文會 fallback 到系統字型。像素字在 8px
+     還讀得出來,中文不行,所以中文模式把小字級整體放大一級。字體本身不換,
+     混排時英數字仍然是像素字。 */
+  [data-lang="zh"] .psrc,
+  [data-lang="zh"] .reset{font-size:10px}
+  [data-lang="zh"] .label{font-size:12px}
+  [data-lang="zh"] .perr,
+  [data-lang="zh"] footer,
+  [data-lang="zh"] .btn{font-size:11px}
 </style>
 </head>
 <body>
@@ -680,13 +727,88 @@ PAGE = r"""<!DOCTYPE html>
   <div id="panels"></div>
   <footer>
     <span class="dot" id="dot"></span>
-    <span id="status">連線中…</span>
+    <span id="status">…</span>
     <span class="swatches" id="swatches"></span>
+    <button class="btn" id="lang"></button>
     <button class="btn" id="refresh">REFRESH</button>
   </footer>
 </div>
 
 <script>
+// ── i18n ──────────────────────────────────────────────
+// 翻譯全部放前端:切語言不用重打 API,也不會有伺服器語系跟瀏覽器對不上的問題。
+// 伺服器只負責送穩定的 key(視窗的 kind/win、錯誤的 code),句子一律在這裡組。
+// 要加第三種語言就在 I18N 補一組,鍵補齊即可,其他地方都不用動。
+const LANG_KEY = "ai-usage-lang";
+const I18N = {
+  en: {
+    title:"AI Usage", usage:"Usage", refresh:"REFRESH", other:"中文",
+    switchTo:"切換為中文",
+    connecting:"Connecting…", waiting:"Waiting for first poll…",
+    noData:"No data yet", noServer:"Server not responding", unknown:"Unknown error",
+    ok:"OK", errors:n => n + " ERROR", age:s => "(" + s + "s ago)",
+    resets:v => "Resets in " + v, now:"Resets now",
+    dur:(d,h,m) => d ? d+"d "+h+"h" : h ? h+"h "+m+"m" : m+"m",
+    kind:{session:"Session", weekly:"Weekly", monthly:"Monthly",
+          opus:"Opus", fable:"Fable"},
+    err:{
+      no_cred_claude:"No credentials. Install Claude Code, then run `claude` to log in",
+      no_cred_codex:"No credentials. Install Codex CLI, then run `codex` to log in",
+      expired_claude:"Credentials invalid or expired — run `claude` again",
+      expired_codex:"Credentials expired — open Codex CLI to refresh them",
+      connect:a => "Connection failed: " + a,
+      no_headers:a => "No usage headers in response (HTTP " + a + ")",
+      http:a => "Endpoint returned HTTP " + a,
+      bad_json:"Response is not valid JSON",
+      no_usage:"No usage data in response",
+      unexpected:a => "Unexpected error: " + a,
+    },
+  },
+  zh: {
+    title:"AI 用量", usage:"用量", refresh:"重新整理", other:"EN",
+    switchTo:"Switch to English",
+    connecting:"連線中…", waiting:"等待第一次輪詢…",
+    noData:"尚未取得任何資料", noServer:"伺服器沒回應", unknown:"未知錯誤",
+    ok:"正常", errors:n => n + " 項錯誤", age:s => "(" + s + " 秒前)",
+    resets:v => v + "後重置", now:"即將重置",
+    dur:(d,h,m) => d ? d+" 天 "+h+" 小時" : h ? h+" 小時 "+m+" 分" : m+" 分",
+    kind:{session:"工作階段", weekly:"每週", monthly:"每月",
+          opus:"Opus", fable:"Fable"},
+    err:{
+      no_cred_claude:"找不到憑證。裝好 Claude Code 後跑一次 `claude` 登入",
+      no_cred_codex:"找不到憑證。裝好 Codex CLI 後跑一次 `codex` 登入",
+      expired_claude:"憑證無效或已過期,重跑一次 `claude` 登入",
+      expired_codex:"憑證已過期,開一次 Codex CLI 讓它更新",
+      connect:a => "連線失敗: " + a,
+      no_headers:a => "回應沒有用量 header (HTTP " + a + ")",
+      http:a => "端點回應 HTTP " + a,
+      bad_json:"回應不是合法 JSON",
+      no_usage:"回應裡沒有用量資料",
+      unexpected:a => "未預期錯誤: " + a,
+    },
+  },
+};
+
+// 開場的語言由 head 那段 inline script 決定,這裡只是把它接手過來。
+let LANG = document.documentElement.getAttribute("data-lang") === "zh" ? "zh" : "en";
+function L(){ return I18N[LANG]; }
+
+function applyLang(id, save){
+  LANG = I18N[id] ? id : "en";
+  const d = document.documentElement;
+  d.setAttribute("data-lang", LANG);
+  d.setAttribute("lang", LANG === "zh" ? "zh-Hant" : "en");
+  document.title = L().title;
+  const lb = document.getElementById("lang");
+  lb.textContent = L().other;
+  lb.title = L().switchTo;
+  document.getElementById("refresh").textContent = L().refresh;
+  if (save) { try { localStorage.setItem(LANG_KEY, LANG); } catch(e){} }
+  // 已經有資料就整個重畫;沒有的話至少把狀態列換掉。
+  if (last) render(last);
+  else document.getElementById("status").textContent = L().connecting;
+}
+
 // ── 主題 ──────────────────────────────────────────────
 // a / b 只是色票左上、右下那兩塊顏色,跟主題本身的變數是分開的。
 const THEMES = [
@@ -731,12 +853,16 @@ function buildSwatches(){
     b.addEventListener("click", () => applyTheme(b.dataset.theme, true)));
 }
 
-// 按 T 循環切換。
+// 按 T 循環切換主題,按 L 切換語言。
 document.addEventListener("keydown", e => {
-  if (e.key !== "t" && e.key !== "T") return;
-  const cur = document.documentElement.getAttribute("data-theme");
-  const i = THEMES.findIndex(t => t.id === cur);
-  applyTheme(THEMES[(i + 1) % THEMES.length].id, true);
+  const k = e.key.toLowerCase();
+  if (k === "t"){
+    const cur = document.documentElement.getAttribute("data-theme");
+    const i = THEMES.findIndex(t => t.id === cur);
+    applyTheme(THEMES[(i + 1) % THEMES.length].id, true);
+  } else if (k === "l"){
+    applyLang(LANG === "zh" ? "en" : "zh", true);
+  }
 });
 
 // ── 用量 ──────────────────────────────────────────────
@@ -745,13 +871,28 @@ function esc(s){
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
  
-function fmtCountdown(sec){
+// 回傳整句(「Resets in 4h 50m」/「4 小時 50 分後重置」),因為兩種語言的
+// 詞序不同,不能讓呼叫端自己拼前綴。
+function fmtReset(sec){
   if (sec === null || sec === undefined) return null;
-  if (sec <= 0) return "now";
+  if (sec <= 0) return L().now;
   const d = Math.floor(sec/86400), h = Math.floor(sec%86400/3600), m = Math.floor(sec%3600/60);
-  if (d > 0) return d + "d " + h + "h";
-  if (h > 0) return h + "h " + m + "m";
-  return m + "m";
+  return L().resets(L().dur(d, h, m));
+}
+
+// 視窗標題:伺服器送 kind/win,認得就翻譯,認不得就用它給的英文 label。
+function winLabel(w){
+  const name = w.kind && L().kind[w.kind];
+  if (!name) return w.label || "";
+  return w.win ? name + " (" + w.win + ")" : name;
+}
+
+// 錯誤:優先用 code 查翻譯,查不到就退回伺服器給的原句。
+function errText(p){
+  const e = L().err[p.code];
+  if (typeof e === "function") return e(p.arg);
+  if (typeof e === "string") return e;
+  return p.error || L().unknown;
 }
  
 let last = null;
@@ -767,30 +908,32 @@ function renderPanel(p){
   let inner;
 
   if (!p.ok){
-    inner = '<div class="perr">' + esc(p.error || "未知錯誤") + '</div>';
+    inner = '<div class="perr">' + esc(errText(p)) + '</div>';
   } else {
     inner = p.windows.map(w => {
       const pct = Math.max(0, Math.min(100, w.percent));
       const cls = pct >= 90 ? "crit" : pct >= 70 ? "warn" : "";
-      const left = fmtCountdown(w.reset_epoch ? w.reset_epoch - now : null);
+      const left = fmtReset(w.reset_epoch ? w.reset_epoch - now : null);
+      // 用 label 當 key,不用翻譯後的字串,不然切語言會被當成不同的列。
       const key = p.id + "|" + w.label;
       const from = prevPct.has(key) ? prevPct.get(key) : 0;
       prevPct.set(key, pct);
       const delay = (rowSeq++) * 70;
       return '<div class="row" style="--d:' + delay + 'ms">'
-        + '<div class="row-top"><div class="label">' + esc(w.label) + '</div>'
+        + '<div class="row-top"><div class="label">' + esc(winLabel(w)) + '</div>'
         + '<div class="pct" data-from="' + from + '" data-to="' + pct + '">'
         + from.toFixed(0) + '%</div></div>'
         + '<div class="track"><div class="fill ' + cls + '" style="width:' + from
         + '%" data-to="' + pct + '"></div></div>'
-        + (left ? '<div class="reset">Resets in ' + left + '</div>' : '')
+        + (left ? '<div class="reset">' + esc(left) + '</div>' : '')
         + '</div>';
     }).join("");
   }
  
   return '<div class="panel p-' + esc(p.id) + '">'
     + '<div class="phead"><div class="pname">' + esc(p.name) + '</div>'
-    + '<div class="psrc">Usage' + (p.plan ? '<br>' + esc(p.plan) : '') + '</div></div>'
+    + '<div class="psrc">' + esc(L().usage)
+    + (p.plan ? '<br>' + esc(p.plan) : '') + '</div></div>'
     + inner + '</div>';
 }
  
@@ -826,7 +969,7 @@ function render(data){
   rowSeq = 0;
   host.innerHTML =
     providers.length ? providers.map(renderPanel).join("")
-                     : '<div class="perr">尚未取得任何資料</div>';
+                     : '<div class="perr">' + esc(L().noData) + '</div>';
 
   // 逐列浮出只在第一次做,之後每 15 秒再來一次會很吵。
   if (firstRender && !REDUCED){
@@ -844,10 +987,10 @@ function render(data){
 function tickAge(){
   if (!last) return;
   const el = document.getElementById("status");
-  if (!last.fetched_at){ el.textContent = "等待第一次輪詢…"; return; }
+  if (!last.fetched_at){ el.textContent = L().waiting; return; }
   const age = Math.max(0, Math.floor(Date.now()/1000) - last.fetched_at);
   const bad = (last.providers || []).filter(p => !p.ok).length;
-  el.textContent = (bad ? bad + " ERROR" : "OK") + "  (" + age + "s ago)";
+  el.textContent = (bad ? L().errors(bad) : L().ok) + "  " + L().age(age);
 }
  
 function setBusy(b){
@@ -861,7 +1004,7 @@ async function load(force){
     const r = await fetch("/api/usage" + (force ? "?refresh=1" : ""));
     render(await r.json());
   } catch (e) {
-    document.getElementById("status").textContent = "伺服器沒回應";
+    document.getElementById("status").textContent = L().noServer;
     document.getElementById("dot").classList.add("bad");
   } finally {
     setBusy(false);
@@ -869,12 +1012,15 @@ async function load(force){
 }
 
 document.getElementById("refresh").addEventListener("click", () => load(true));
+document.getElementById("lang").addEventListener("click", () =>
+  applyLang(LANG === "zh" ? "en" : "zh", true));
 
 if (!REDUCED) replay(document.getElementById("screen"), "boot", 900);
 buildSwatches();
 let saved = null;
 try { saved = localStorage.getItem(THEME_KEY); } catch(e){}
 applyTheme(saved || "__DEFAULT_THEME__", false);
+applyLang(LANG, false);
 load(false);
 setInterval(() => load(false), 15000);
 setInterval(tickAge, 1000);
