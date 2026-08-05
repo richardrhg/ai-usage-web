@@ -530,6 +530,12 @@ PAGE = r"""<!DOCTYPE html>
     --p2-glow:40,150,105; --p2-edge:#93b3a2; --p2-track:#cfe0d5;
   }
 
+  /* 中文用的字型堆疊。Press Start 2P 只有拉丁字母,中文會逐字 fallback,
+     而兩種字型的 em 框比例差很多,混排就會高低不一。所以「會出現中文的元素」
+     整個換成這組,讓該元素裡的中文和英數字用同一套度量。 */
+  :root{--zh-font:"Microsoft JhengHei","PingFang TC","Noto Sans TC",
+                 "Hiragino Sans TC",ui-sans-serif,sans-serif}
+
   *{box-sizing:border-box;margin:0;padding:0}
   body{
     min-height:100vh;
@@ -628,10 +634,16 @@ PAGE = r"""<!DOCTYPE html>
     border-color:var(--ink);
     box-shadow:0 0 0 2px var(--halo), 0 0 10px rgba(var(--p1-glow), calc(var(--glow-a) * .9));
   }
+  /* 高度寫死 + flex 置中:按鈕的框就不會因為裡面是像素字還是中文而變高變矮。
+     #lang 永遠可能顯示中文(英文模式下它寫的是「中文」),所以字型固定用中文那組,
+     min-width 則是避免「中文」「EN」兩種寬度讓按鈕跳動。 */
   .btn{
     font-family:inherit;font-size:9px;color:var(--dim);background:none;
-    border:2px solid var(--edge);border-radius:4px;padding:6px 9px;cursor:pointer;
+    border:2px solid var(--edge);border-radius:4px;padding:0 10px;cursor:pointer;
+    height:28px;line-height:1;
+    display:inline-flex;align-items:center;justify-content:center;
   }
+  #lang{font-family:var(--zh-font);font-size:12px;min-width:52px}
   .btn:hover{color:var(--ink);border-color:var(--p1)}
   .btn:active{transform:translateY(1px)}
   .btn.busy{color:var(--ink);border-color:var(--p1)}
@@ -713,12 +725,21 @@ PAGE = r"""<!DOCTYPE html>
      Press Start 2P 只有拉丁字母,中文會 fallback 到系統字型。像素字在 8px
      還讀得出來,中文不行,所以中文模式把小字級整體放大一級。字體本身不換,
      混排時英數字仍然是像素字。 */
+  /* 會混到中文的元素整個換字型,元素內就只有一套度量,不會忽高忽低。
+     .pname(Claude / Codex)和 .pct(32%)永遠是純英數,留著像素字。 */
+  [data-lang="zh"] .label,
+  [data-lang="zh"] .reset,
+  [data-lang="zh"] .perr,
+  [data-lang="zh"] .psrc,
+  [data-lang="zh"] #status,
+  [data-lang="zh"] .btn{font-family:var(--zh-font)}
+
   [data-lang="zh"] .psrc,
   [data-lang="zh"] .reset{font-size:10px}
   [data-lang="zh"] .label{font-size:12px}
   [data-lang="zh"] .perr,
   [data-lang="zh"] footer,
-  [data-lang="zh"] .btn{font-size:11px}
+  [data-lang="zh"] .btn{font-size:12px}
   /* letter-spacing 是為拉丁字母調的,中文本來就是等寬方塊,再加字距會散掉 */
   [data-lang="zh"] .psrc,
   [data-lang="zh"] .reset,
