@@ -719,6 +719,10 @@ PAGE = r"""<!DOCTYPE html>
   [data-lang="zh"] .perr,
   [data-lang="zh"] footer,
   [data-lang="zh"] .btn{font-size:11px}
+  /* letter-spacing 是為拉丁字母調的,中文本來就是等寬方塊,再加字距會散掉 */
+  [data-lang="zh"] .psrc,
+  [data-lang="zh"] .reset,
+  [data-lang="zh"] footer{letter-spacing:0}
 </style>
 </head>
 <body>
@@ -746,9 +750,10 @@ const I18N = {
     switchTo:"切換為中文",
     connecting:"Connecting…", waiting:"Waiting for first poll…",
     noData:"No data yet", noServer:"Server not responding", unknown:"Unknown error",
-    ok:"OK", errors:n => n + " ERROR", age:s => "(" + s + "s ago)",
+    ok:"OK", errors:n => n + " ERROR", age:s => "  (" + s + "s ago)",
     resets:v => "Resets in " + v, now:"Resets now",
     dur:(d,h,m) => d ? d+"d "+h+"h" : h ? h+"h "+m+"m" : m+"m",
+    win:(name,w) => name + " (" + w + ")",
     kind:{session:"Session", weekly:"Weekly", monthly:"Monthly",
           opus:"Opus", fable:"Fable"},
     err:{
@@ -769,9 +774,12 @@ const I18N = {
     switchTo:"Switch to English",
     connecting:"連線中…", waiting:"等待第一次輪詢…",
     noData:"尚未取得任何資料", noServer:"伺服器沒回應", unknown:"未知錯誤",
-    ok:"正常", errors:n => n + " 項錯誤", age:s => "(" + s + " 秒前)",
+    // 中文一律不塞字面空白:數字是像素字、中文是系統字,寬度差很多,
+    // 空白會被撐得很誇張。斷詞交給標點和單位本身。
+    ok:"正常", errors:n => n + "項錯誤", age:s => " · " + s + "秒前",
     resets:v => v + "後重置", now:"即將重置",
-    dur:(d,h,m) => d ? d+" 天 "+h+" 小時" : h ? h+" 小時 "+m+" 分" : m+" 分",
+    dur:(d,h,m) => d ? d+"天"+h+"小時" : h ? h+"小時"+m+"分" : m+"分",
+    win:(name,w) => name + " " + w,
     kind:{session:"工作階段", weekly:"每週", monthly:"每月",
           opus:"Opus", fable:"Fable"},
     err:{
@@ -884,7 +892,7 @@ function fmtReset(sec){
 function winLabel(w){
   const name = w.kind && L().kind[w.kind];
   if (!name) return w.label || "";
-  return w.win ? name + " (" + w.win + ")" : name;
+  return w.win ? L().win(name, w.win) : name;
 }
 
 // 錯誤:優先用 code 查翻譯,查不到就退回伺服器給的原句。
@@ -990,7 +998,8 @@ function tickAge(){
   if (!last.fetched_at){ el.textContent = L().waiting; return; }
   const age = Math.max(0, Math.floor(Date.now()/1000) - last.fetched_at);
   const bad = (last.providers || []).filter(p => !p.ok).length;
-  el.textContent = (bad ? L().errors(bad) : L().ok) + "  " + L().age(age);
+  // 分隔符收在 age 裡,因為兩種語言的間距寬度不一樣。
+  el.textContent = (bad ? L().errors(bad) : L().ok) + L().age(age);
 }
  
 function setBusy(b){
