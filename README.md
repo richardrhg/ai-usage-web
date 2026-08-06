@@ -1,5 +1,10 @@
 # AI Usage Web
 
+[![CI](https://github.com/richardrhg/ai-usage-web/actions/workflows/ci.yml/badge.svg)](https://github.com/richardrhg/ai-usage-web/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
+![AI Usage Web 儀表板](docs/screenshot.png)
+
 本機版的「Claude + Codex 用量儀表板」。在自己的電腦上跑，分別去問 Anthropic 和 OpenAI
 目前的用量，把 5 小時 / 每週的額度畫成復古像素風網頁。
 
@@ -83,3 +88,15 @@ claude          # 或 codex
   `anthropic-ratelimit-unified-*-utilization` 來取得用量。
 - Codex 那邊打的是 Codex CLI 自己在用的 `https://chatgpt.com/backend-api/wham/usage`，
   OpenAI 沒有正式公開文件，**有可能會變**。
+
+## 測試
+
+測試不會讀取本機憑證，也不會呼叫任何外部 API：
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+## License
+
+[MIT](LICENSE)
