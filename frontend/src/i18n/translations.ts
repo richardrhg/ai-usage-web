@@ -1,0 +1,204 @@
+export type LangId = "zh" | "en";
+
+export const LANG_KEY = "ai-usage-lang";
+export const THEME_KEY = "ai-usage-theme";
+
+export interface ThemeDef {
+  id: string;
+  name: string;
+  a: string;
+  b: string;
+}
+
+export const THEMES: ThemeDef[] = [
+  { id: "midnight", name: "Midnight", a: "#3f7bff", b: "#0b1b3a" },
+  { id: "phosphor", name: "Phosphor", a: "#23e07a", b: "#03120a" },
+  { id: "amber", name: "Amber", a: "#ff9c1a", b: "#140a02" },
+  { id: "synthwave", name: "Synthwave", a: "#b44aff", b: "#11052a" },
+  { id: "ice", name: "Ice", a: "#17c0e8", b: "#04151c" },
+  { id: "paper", name: "Paper", a: "#2f6bd8", b: "#f3edde" },
+];
+
+export const I18N = {
+  zh: {
+    title: "AI 用量監測",
+    subtitle: "遠端多帳號自動續期儀表板",
+    usage: "用量",
+    refresh: "重新整理",
+    cooldown: (s: number) => `冷卻 ${s}s`,
+    otherLang: "EN",
+    switchToLang: "Switch to English",
+    connecting: "連線中…",
+    waiting: "等待第一次輪詢…",
+    noData: "尚未連結任何 AI 帳號",
+    noDataHint: "點擊上方「連結帳號」即可透過 OAuth 綁定 Claude、ChatGPT 或 Gemini，過期會自動續期。",
+    noServer: "伺服器無回應",
+    unknown: "未知錯誤",
+    ok: "正常",
+    demoMode: "DEMO 預覽",
+    errors: (n: number) => `${n}項錯誤`,
+    age: (s: number) => ` · ${s}秒前`,
+    resets: (v: string) => `${v}後重置`,
+    now: "即將重置",
+    dur: (d: number, h: number, m: number) =>
+      d ? `${d}天${h}小時` : h ? `${h}小時${m}分` : `${m}分`,
+    win: (name: string, w: string) => `${name} ${w}`,
+    extraCredits: (used: number, limit: number, cur: string) =>
+      `加購額度 ${cur === "USD" ? "$" : `${cur} `}${used.toFixed(2)} / ${limit.toFixed(0)}`,
+    kind: {
+      session: "工作階段",
+      weekly: "每週",
+      monthly: "每月",
+      opus: "Opus",
+      fable: "Fable",
+      sonnet: "Sonnet",
+    } as Record<string, string>,
+    auth: {
+      loginTab: "登入帳號",
+      registerTab: "註冊新帳號",
+      username: "使用者帳號",
+      usernamePlaceholder: "例如 richard",
+      password: "密碼 (至少 6 碼)",
+      passwordPlaceholder: "輸入密碼",
+      loginBtn: "登入儀表板",
+      registerBtn: "建立帳號並登入",
+      demoBtn: "免登入看 Demo 預覽",
+      exitDemo: "返回登入",
+      logout: "登出",
+      submitting: "處理中…",
+    },
+    accounts: {
+      manageBtn: "連結帳號",
+      modalTitle: "AI 帳號 OAuth 連結與自動續期管理",
+      close: "關閉",
+      connected: "已連結",
+      disconnected: "未連結",
+      autoRefreshOn: "自動續期開啟",
+      tokenExpired: "憑證需重新授權",
+      tokenExpiresIn: (v: string) => `Token ${v}後自動換發`,
+      connectBtn: "OAuth 連結",
+      reconnectBtn: "重新授權",
+      disconnectBtn: "解除綁定",
+      cancelFlow: "取消",
+      openAuthPage: "1. 開啟官方授權頁面",
+      copyCode: "複製驗證碼",
+      copied: "已複製！",
+      submitCode: "送出並完成綁定",
+      verifying: "交換憑證中…",
+      claudeStep:
+        "點擊上方按鈕登入 Claude 並按同意後，將官方畫面顯示的 `code#state` 授權碼貼在下方：",
+      claudePlaceholder: "貼上授權碼 (例如 abcdef12345#state...)",
+      codexStep:
+        "點擊上方按鈕開啟 OpenAI 驗證頁，輸入下方單次裝置碼。授權完成後本視窗會自動偵測並完成綁定：",
+      codexPolling: "等待瀏覽器授權確認中（自動輪詢）…",
+      geminiStep:
+        "點擊上方按鈕完成 Google 授權後，瀏覽器會跳轉至 `http://localhost:8085/oauth2callback?code=...`（畫面顯示無法連線屬正常現象），請複製瀏覽器網址列整串網址貼在下方：",
+      geminiNote:
+        "註：Google 對部分個人免費方案限制 CLI OAuth 配額查詢；建議僅用於私人自架帳號。",
+      geminiPlaceholder: "貼上 http://localhost:8085/oauth2callback?code=...",
+    },
+    err: {
+      expired_claude: "Claude 憑證已失效，請點「連結帳號」重新授權",
+      expired_codex: "ChatGPT 憑證已失效，請點「連結帳號」重新授權",
+      expired_gemini: "Gemini 憑證已失效，請點「連結帳號」重新授權",
+      ineligible_gemini: "Google 已限制此帳號方案使用 Gemini CLI OAuth 查詢配額",
+      refresh_failed: "自動續期暫時失敗，將於下一輪重試",
+      connect: (a: string | number) => `連線失敗: ${a}`,
+      no_headers: (a: string | number) => `回應沒有用量標頭 (HTTP ${a})`,
+      http: (a: string | number) => `上游回應 HTTP ${a}`,
+      bad_json: "回應不是合法 JSON",
+      no_usage: "回應裡沒有用量資料",
+    } as Record<string, string | ((arg: string | number) => string)>,
+  },
+  en: {
+    title: "AI Usage Monitor",
+    subtitle: "Remote Multi-Account Auto-Refresh Dashboard",
+    usage: "Usage",
+    refresh: "REFRESH",
+    cooldown: (s: number) => `WAIT ${s}s`,
+    otherLang: "中文",
+    switchToLang: "切換為中文",
+    connecting: "Connecting…",
+    waiting: "Waiting for first poll…",
+    noData: "No AI accounts linked yet",
+    noDataHint:
+      "Click 'ACCOUNTS' above to link Claude, ChatGPT, or Gemini via OAuth with automatic token refresh.",
+    noServer: "Server not responding",
+    unknown: "Unknown error",
+    ok: "OK",
+    demoMode: "DEMO MODE",
+    errors: (n: number) => `${n} ERROR`,
+    age: (s: number) => ` (${s}s ago)`,
+    resets: (v: string) => `Resets in ${v}`,
+    now: "Resets now",
+    dur: (d: number, h: number, m: number) =>
+      d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`,
+    win: (name: string, w: string) => `${name} (${w})`,
+    extraCredits: (used: number, limit: number, cur: string) =>
+      `Extra ${cur === "USD" ? "$" : `${cur} `}${used.toFixed(2)} / ${limit.toFixed(0)}`,
+    kind: {
+      session: "Session",
+      weekly: "Weekly",
+      monthly: "Monthly",
+      opus: "Opus",
+      fable: "Fable",
+      sonnet: "Sonnet",
+    } as Record<string, string>,
+    auth: {
+      loginTab: "SIGN IN",
+      registerTab: "REGISTER",
+      username: "Username",
+      usernamePlaceholder: "e.g. richard",
+      password: "Password (min 6 chars)",
+      passwordPlaceholder: "Enter password",
+      loginBtn: "SIGN IN",
+      registerBtn: "CREATE ACCOUNT",
+      demoBtn: "TRY LIVE DEMO",
+      exitDemo: "SIGN IN",
+      logout: "LOGOUT",
+      submitting: "WORKING…",
+    },
+    accounts: {
+      manageBtn: "ACCOUNTS",
+      modalTitle: "AI Account OAuth & Auto-Refresh",
+      close: "CLOSE",
+      connected: "CONNECTED",
+      disconnected: "NOT LINKED",
+      autoRefreshOn: "AUTO-REFRESH ON",
+      tokenExpired: "RE-AUTH NEEDED",
+      tokenExpiresIn: (v: string) => `Auto-renews in ${v}`,
+      connectBtn: "CONNECT OAUTH",
+      reconnectBtn: "RECONNECT",
+      disconnectBtn: "DISCONNECT",
+      cancelFlow: "CANCEL",
+      openAuthPage: "1. OPEN OFFICIAL AUTH PAGE",
+      copyCode: "COPY CODE",
+      copied: "COPIED!",
+      submitCode: "VERIFY & LINK",
+      verifying: "EXCHANGING…",
+      claudeStep:
+        "Open the Claude auth page above, click Authorize, then paste the `code#state` shown on Anthropic's page:",
+      claudePlaceholder: "Paste code#state here...",
+      codexStep:
+        "Open OpenAI's device page above and enter this one-time code. This window polls automatically and links once approved:",
+      codexPolling: "Waiting for browser approval (auto-polling)…",
+      geminiStep:
+        "Open Google's auth page above. When redirected to `http://localhost:8085/oauth2callback?code=...` (connection refused is normal), copy the full URL from the address bar and paste below:",
+      geminiNote:
+        "Note: Google restricts Gemini CLI OAuth quota on some retired consumer tiers; intended for self-hosted personal use.",
+      geminiPlaceholder: "Paste http://localhost:8085/oauth2callback?code=...",
+    },
+    err: {
+      expired_claude: "Claude token expired — open ACCOUNTS to reconnect",
+      expired_codex: "ChatGPT token expired — open ACCOUNTS to reconnect",
+      expired_gemini: "Gemini token expired — open ACCOUNTS to reconnect",
+      ineligible_gemini: "Google retired Gemini CLI OAuth for this account tier",
+      refresh_failed: "Auto-refresh failed transiently; will retry next cycle",
+      connect: (a: string | number) => `Connection failed: ${a}`,
+      no_headers: (a: string | number) => `No usage headers in response (HTTP ${a})`,
+      http: (a: string | number) => `Upstream returned HTTP ${a}`,
+      bad_json: "Response is not valid JSON",
+      no_usage: "No usage data in response",
+    } as Record<string, string | ((arg: string | number) => string)>,
+  },
+};

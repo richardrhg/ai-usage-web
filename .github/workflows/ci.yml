@@ -8,14 +8,46 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  backend-and-legacy-tests:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Compile
-        run: python -m py_compile claude_usage_web.py
-      - name: Test
-        run: python -m unittest discover -s tests -v
+      - name: Install backend dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Legacy CLI syntax & unit tests
+        run: |
+          python -m py_compile claude_usage_web.py
+          python -m unittest discover -s tests -v
+      - name: FastAPI backend pytest suite
+        working-directory: backend
+        run: pytest -v
+
+  frontend-and-openapi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install backend & frontend dependencies
+        run: |
+          pip install -r backend/requirements.txt
+          npm --prefix frontend ci
+      - name: Verify OpenAPI schema & generated TypeScript types are up-to-date
+        working-directory: frontend
+        run: |
+          npm run gen:api
+          git diff --exit-code openapi.json src/types/api/schema.d.ts
+      - name: Typecheck & build React frontend
+        working-directory: frontend
+        run: |
+          npm run typecheck
+          npm run build

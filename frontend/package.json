@@ -1,0 +1,25 @@
+{
+  "name": "ai-usage-web-frontend",
+  "private": true,
+  "version": "2.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5173",
+    "build": "tsc -b && vite build",
+    "typecheck": "tsc --noEmit",
+    "gen:api": "node ./scripts/export-openapi.mjs && openapi-typescript ./openapi.json -o ./src/types/api/schema.d.ts"
+  },
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "openapi-typescript": "^7.4.4",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5"
+  }
+}

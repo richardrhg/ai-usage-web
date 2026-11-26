@@ -1,0 +1,1087 @@
+{
+  "components": {
+    "schemas": {
+      "AuthCredentialsRequest": {
+        "properties": {
+          "password": {
+            "maxLength": 128,
+            "minLength": 6,
+            "title": "Password",
+            "type": "string"
+          },
+          "username": {
+            "maxLength": 64,
+            "minLength": 2,
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "password"
+        ],
+        "title": "AuthCredentialsRequest",
+        "type": "object"
+      },
+      "AuthSessionResponse": {
+        "properties": {
+          "allow_registration": {
+            "default": true,
+            "title": "Allow Registration",
+            "type": "boolean"
+          },
+          "authenticated": {
+            "title": "Authenticated",
+            "type": "boolean"
+          },
+          "user": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UserOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "authenticated"
+        ],
+        "title": "AuthSessionResponse",
+        "type": "object"
+      },
+      "DashboardUsageResponse": {
+        "properties": {
+          "connections": {
+            "items": {
+              "$ref": "#/components/schemas/ProviderConnectionOut"
+            },
+            "title": "Connections",
+            "type": "array"
+          },
+          "fetched_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fetched At"
+          },
+          "is_demo": {
+            "default": false,
+            "title": "Is Demo",
+            "type": "boolean"
+          },
+          "providers": {
+            "items": {
+              "$ref": "#/components/schemas/ProviderUsageOut"
+            },
+            "title": "Providers",
+            "type": "array"
+          },
+          "refresh_cooldown_seconds": {
+            "default": 0,
+            "title": "Refresh Cooldown Seconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "providers",
+          "connections"
+        ],
+        "title": "DashboardUsageResponse",
+        "type": "object"
+      },
+      "DisconnectResponse": {
+        "properties": {
+          "disconnected": {
+            "title": "Disconnected",
+            "type": "boolean"
+          },
+          "provider": {
+            "enum": [
+              "claude",
+              "codex",
+              "gemini"
+            ],
+            "title": "Provider",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "disconnected"
+        ],
+        "title": "DisconnectResponse",
+        "type": "object"
+      },
+      "ExtraUsageOut": {
+        "properties": {
+          "currency": {
+            "default": "USD",
+            "title": "Currency",
+            "type": "string"
+          },
+          "enabled": {
+            "default": false,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "limit_amount": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit Amount"
+          },
+          "percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Percent"
+          },
+          "used_amount": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Used Amount"
+          }
+        },
+        "title": "ExtraUsageOut",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "OAuthCodeSubmitRequest": {
+        "properties": {
+          "code_input": {
+            "maxLength": 4096,
+            "minLength": 4,
+            "title": "Code Input",
+            "type": "string"
+          },
+          "state_id": {
+            "maxLength": 128,
+            "minLength": 8,
+            "title": "State Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state_id",
+          "code_input"
+        ],
+        "title": "OAuthCodeSubmitRequest",
+        "type": "object"
+      },
+      "OAuthDevicePollRequest": {
+        "properties": {
+          "state_id": {
+            "maxLength": 128,
+            "minLength": 8,
+            "title": "State Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state_id"
+        ],
+        "title": "OAuthDevicePollRequest",
+        "type": "object"
+      },
+      "OAuthFlowStatusResponse": {
+        "properties": {
+          "account_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Label"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "provider": {
+            "enum": [
+              "claude",
+              "codex",
+              "gemini"
+            ],
+            "title": "Provider",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "completed",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "status"
+        ],
+        "title": "OAuthFlowStatusResponse",
+        "type": "object"
+      },
+      "OAuthStartResponse": {
+        "properties": {
+          "authorize_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Authorize Url"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "integer"
+          },
+          "oauth_method": {
+            "enum": [
+              "pkce_code",
+              "device_code",
+              "localhost_url"
+            ],
+            "title": "Oauth Method",
+            "type": "string"
+          },
+          "poll_interval_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Poll Interval Seconds"
+          },
+          "provider": {
+            "enum": [
+              "claude",
+              "codex",
+              "gemini"
+            ],
+            "title": "Provider",
+            "type": "string"
+          },
+          "state_id": {
+            "title": "State Id",
+            "type": "string"
+          },
+          "user_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Code"
+          },
+          "verification_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verification Url"
+          }
+        },
+        "required": [
+          "provider",
+          "oauth_method",
+          "state_id",
+          "expires_at"
+        ],
+        "title": "OAuthStartResponse",
+        "type": "object"
+      },
+      "ProviderConnectionOut": {
+        "properties": {
+          "account_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Label"
+          },
+          "auto_refresh": {
+            "default": false,
+            "title": "Auto Refresh",
+            "type": "boolean"
+          },
+          "connected": {
+            "title": "Connected",
+            "type": "boolean"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "last_refreshed_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Refreshed At"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "oauth_method": {
+            "enum": [
+              "pkce_code",
+              "device_code",
+              "localhost_url"
+            ],
+            "title": "Oauth Method",
+            "type": "string"
+          },
+          "provider": {
+            "enum": [
+              "claude",
+              "codex",
+              "gemini"
+            ],
+            "title": "Provider",
+            "type": "string"
+          },
+          "refresh_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refresh Error"
+          },
+          "refresh_status": {
+            "default": "disconnected",
+            "enum": [
+              "ok",
+              "expired",
+              "error",
+              "disconnected"
+            ],
+            "title": "Refresh Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "name",
+          "oauth_method",
+          "connected"
+        ],
+        "title": "ProviderConnectionOut",
+        "type": "object"
+      },
+      "ProviderUsageOut": {
+        "properties": {
+          "account_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Label"
+          },
+          "arg": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Arg"
+          },
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
+          },
+          "connected": {
+            "default": true,
+            "title": "Connected",
+            "type": "boolean"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "extra_usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExtraUsageOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "enum": [
+              "claude",
+              "codex",
+              "gemini"
+            ],
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "plan": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "windows": {
+            "items": {
+              "$ref": "#/components/schemas/UsageWindowOut"
+            },
+            "title": "Windows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "ok"
+        ],
+        "title": "ProviderUsageOut",
+        "type": "object"
+      },
+      "UsageWindowOut": {
+        "properties": {
+          "kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "session",
+                  "weekly",
+                  "monthly",
+                  "opus",
+                  "fable",
+                  "sonnet",
+                  "model"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "percent": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Percent",
+            "type": "number"
+          },
+          "reset_epoch": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reset Epoch"
+          },
+          "win": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Win"
+          }
+        },
+        "required": [
+          "label",
+          "percent"
+        ],
+        "title": "UsageWindowOut",
+        "type": "object"
+      },
+      "UserOut": {
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "username": {
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "username",
+          "created_at"
+        ],
+        "title": "UserOut",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "Multi-user remote AI subscription usage monitor supporting Claude, ChatGPT (Codex), and Google Gemini OAuth with Single-flight automatic token refresh.",
+    "title": "AI Usage Web API",
+    "version": "2.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/auth/login": {
+      "post": {
+        "operationId": "loginUser",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthCredentialsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSessionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Login",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/logout": {
+      "post": {
+        "operationId": "logoutUser",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSessionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Logout",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/me": {
+      "get": {
+        "operationId": "getAuthSession",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSessionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Me",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/register": {
+      "post": {
+        "operationId": "registerUser",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthCredentialsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSessionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Register",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/oauth/codex/poll": {
+      "post": {
+        "operationId": "pollCodexDeviceOAuth",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OAuthDevicePollRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthFlowStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Poll Codex Device",
+        "tags": [
+          "oauth"
+        ]
+      }
+    },
+    "/api/oauth/{provider}": {
+      "delete": {
+        "operationId": "disconnectProviderOAuth",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "enum": [
+                "claude",
+                "codex",
+                "gemini"
+              ],
+              "title": "Provider",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DisconnectResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Disconnect Provider",
+        "tags": [
+          "oauth"
+        ]
+      }
+    },
+    "/api/oauth/{provider}/complete": {
+      "post": {
+        "operationId": "completeProviderOAuth",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "enum": [
+                "claude",
+                "codex",
+                "gemini"
+              ],
+              "title": "Provider",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OAuthCodeSubmitRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthFlowStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Complete Code Oauth",
+        "tags": [
+          "oauth"
+        ]
+      }
+    },
+    "/api/oauth/{provider}/start": {
+      "post": {
+        "operationId": "startProviderOAuth",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "enum": [
+                "claude",
+                "codex",
+                "gemini"
+              ],
+              "title": "Provider",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthStartResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Oauth",
+        "tags": [
+          "oauth"
+        ]
+      }
+    },
+    "/api/usage": {
+      "get": {
+        "operationId": "getDashboardUsage",
+        "parameters": [
+          {
+            "description": "回傳三平台展示假資料",
+            "in": "query",
+            "name": "demo",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "回傳三平台展示假資料",
+              "title": "Demo",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardUsageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Usage",
+        "tags": [
+          "usage"
+        ]
+      }
+    },
+    "/api/usage/refresh": {
+      "post": {
+        "operationId": "refreshDashboardUsage",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardUsageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Refresh Usage",
+        "tags": [
+          "usage"
+        ]
+      }
+    }
+  }
+}
