@@ -17,6 +17,45 @@ export type AlertTestResponse = components["schemas"]["AlertTestResponse"];
 export type AlertEventOut = components["schemas"]["AlertEventOut"];
 export type ProviderId = ProviderConnectionOut["provider"];
 
+export type CostSummaryResponse = components["schemas"]["CostSummaryResponse"];
+export type CostDailyPointOut = components["schemas"]["CostDailyPointOut"];
+export type CostGroupRowOut = components["schemas"]["CostGroupRowOut"];
+export type CostTotalsOut = components["schemas"]["CostTotalsOut"];
+export type MonthlyBudgetStatusOut = components["schemas"]["MonthlyBudgetStatusOut"];
+export type CostDrilldownResponse = components["schemas"]["CostDrilldownResponse"];
+export type CostDrilldownSubItemOut = components["schemas"]["CostDrilldownSubItemOut"];
+export type CostDrilldownDayOut = components["schemas"]["CostDrilldownDayOut"];
+export type CostApiKeyOut = components["schemas"]["CostApiKeyOut"];
+export type CostApiKeyCreateRequest = components["schemas"]["CostApiKeyCreateRequest"];
+export type CostApiKeyCreateResponse = components["schemas"]["CostApiKeyCreateResponse"];
+export type CostApiKeyListResponse = components["schemas"]["CostApiKeyListResponse"];
+export type CostApiKeyDeleteResponse = components["schemas"]["CostApiKeyDeleteResponse"];
+export type CostBudgetUpdateRequest = components["schemas"]["CostBudgetUpdateRequest"];
+export type CostSyncResponse = components["schemas"]["CostSyncResponse"];
+export type CostIngestRequest = components["schemas"]["CostIngestRequest"];
+export type CostIngestResponse = components["schemas"]["CostIngestResponse"];
+export type CostDays = CostSummaryResponse["days"];
+export type CostGroupBy = CostSummaryResponse["group_by"];
+export type CostKeyProvider = CostApiKeyOut["provider"];
+
+export interface CostSummaryQuery {
+  days?: CostDays;
+  group_by?: CostGroupBy;
+  provider?: string | null;
+  orderby?: string;
+  top?: number;
+  skip?: number;
+  demo?: boolean;
+}
+
+export interface CostDrilldownQuery {
+  group_by: CostGroupBy;
+  group_value: string;
+  days?: CostDays;
+  provider?: string | null;
+  demo?: boolean;
+}
+
 export class ApiError extends Error {
   readonly status: number;
 
@@ -150,6 +189,85 @@ export const api = {
     return requestJson<AlertTestResponse>("/api/alerts/test", {
       method: "POST",
       body: JSON.stringify(payload ?? {}),
+    });
+  },
+
+  /**
+   * Single-shot O(1) cost aggregation endpoint: fetches window totals, monthly budget
+   * & linear projection, daily provider-stacked series, and SQLite GROUP BY rows + total_count
+   * in a single HTTP request.
+   */
+  getCostSummary(query: CostSummaryQuery = {}): Promise<CostSummaryResponse> {
+    const params = new URLSearchParams();
+    if (query.days != null) params.set("days", String(query.days));
+    if (query.group_by) params.set("group_by", query.group_by);
+    if (query.provider) params.set("provider", query.provider);
+    if (query.orderby) params.set("orderby", query.orderby);
+    if (query.top != null) params.set("top", String(query.top));
+    if (query.skip != null) params.set("skip", String(query.skip));
+    if (query.demo) params.set("demo", "true");
+    const qs = params.toString();
+    return requestJson<CostSummaryResponse>(`/api/costs/summary${qs ? `?${qs}` : ""}`);
+  },
+
+  /**
+   * Lazy detail endpoint invoked strictly when the user clicks to expand one row.
+   */
+  getCostDrilldown(query: CostDrilldownQuery): Promise<CostDrilldownResponse> {
+    const params = new URLSearchParams();
+    params.set("group_by", query.group_by);
+    params.set("group_value", query.group_value);
+    if (query.days != null) params.set("days", String(query.days));
+    if (query.provider) params.set("provider", query.provider);
+    if (query.demo) params.set("demo", "true");
+    return requestJson<CostDrilldownResponse>(`/api/costs/drilldown?${params.toString()}`);
+  },
+
+  syncCostUsage(query: Omit<CostSummaryQuery, "demo"> = {}): Promise<CostSyncResponse> {
+    const params = new URLSearchParams();
+    if (query.days != null) params.set("days", String(query.days));
+    if (query.group_by) params.set("group_by", query.group_by);
+    if (query.provider) params.set("provider", query.provider);
+    if (query.orderby) params.set("orderby", query.orderby);
+    if (query.top != null) params.set("top", String(query.top));
+    if (query.skip != null) params.set("skip", String(query.skip));
+    const qs = params.toString();
+    return requestJson<CostSyncResponse>(`/api/costs/sync${qs ? `?${qs}` : ""}`, {
+      method: "POST",
+    });
+  },
+
+  listCostApiKeys(): Promise<CostApiKeyListResponse> {
+    return requestJson<CostApiKeyListResponse>("/api/costs/keys");
+  },
+
+  createCostApiKey(payload: CostApiKeyCreateRequest): Promise<CostApiKeyCreateResponse> {
+    return requestJson<CostApiKeyCreateResponse>("/api/costs/keys", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  deleteCostApiKey(keyId: number): Promise<CostApiKeyDeleteResponse> {
+    return requestJson<CostApiKeyDeleteResponse>(`/api/costs/keys/${keyId}`, {
+      method: "DELETE",
+    });
+  },
+
+  updateCostBudget(monthlyBudgetUsd: number): Promise<MonthlyBudgetStatusOut> {
+    const body: CostBudgetUpdateRequest = {
+      monthly_budget_usd: monthlyBudgetUsd,
+    };
+    return requestJson<MonthlyBudgetStatusOut>("/api/costs/budget", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    });
+  },
+
+  ingestCostRecords(payload: CostIngestRequest): Promise<CostIngestResponse> {
+    return requestJson<CostIngestResponse>("/api/costs/ingest", {
+      method: "POST",
+      body: JSON.stringify(payload),
     });
   },
 };

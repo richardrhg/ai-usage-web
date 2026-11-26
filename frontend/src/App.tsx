@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   api,
   ApiError,
@@ -9,8 +9,12 @@ import {
 import { AccountsModal } from "./components/AccountsModal";
 import { AlertsModal } from "./components/AlertsModal";
 import { AuthPanel } from "./components/AuthPanel";
+import { CostDashboard } from "./components/CostDashboard";
+import { CostKeysModal } from "./components/CostKeysModal";
 import { UsagePanel } from "./components/UsagePanel";
 import { I18N, LANG_KEY, LangId, THEME_KEY, THEMES } from "./i18n/translations";
+
+type DashboardView = "usage" | "costs";
 
 function getInitialLang(): LangId {
   const attr = document.documentElement.getAttribute("data-lang");
@@ -19,6 +23,26 @@ function getInitialLang(): LangId {
 
 function getInitialTheme(): string {
   return document.documentElement.getAttribute("data-theme") || "midnight";
+}
+
+function getInitialDemoMode(): boolean {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const val = (params.get("demo") || "").toLowerCase();
+    return val === "1" || val === "true";
+  } catch {
+    return false;
+  }
+}
+
+function getInitialView(): DashboardView {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const val = (params.get("view") || params.get("tab") || "").toLowerCase();
+    return val === "costs" || val === "billing" ? "costs" : "usage";
+  } catch {
+    return "usage";
+  }
 }
 
 export function App() {
@@ -33,7 +57,8 @@ export function App() {
     user: null,
     allow_registration: true,
   });
-  const [demoMode, setDemoMode] = useState(false);
+  const [demoMode, setDemoMode] = useState<boolean>(getInitialDemoMode);
+  const [activeView, setActiveView] = useState<DashboardView>(getInitialView);
 
   const [dashboard, setDashboard] = useState<DashboardUsageResponse | null>(null);
   const [busy, setBusy] = useState(false);
@@ -41,11 +66,20 @@ export function App() {
   const [cooldown, setCooldown] = useState(0);
   const [nowEpoch, setNowEpoch] = useState(() => Math.floor(Date.now() / 1000));
 
+  // Cost tab footer status & sync wiring
+  const [costBusy, setCostBusy] = useState(false);
+  const [costError, setCostError] = useState(false);
+  const [costCooldown, setCostCooldown] = useState(0);
+  const [costLastSyncedAt, setCostLastSyncedAt] = useState<number | null>(null);
+  const [costReloadVersion, setCostReloadVersion] = useState(0);
+  const costSyncHandlerRef = useRef<(() => Promise<void>) | null>(null);
+
   const [modalOpen, setModalOpen] = useState(false);
   const [modalInitialProvider, setModalInitialProvider] = useState<ProviderId | null>(
     null
   );
   const [alertsModalOpen, setAlertsModalOpen] = useState(false);
+  const [costKeysModalOpen, setCostKeysModalOpen] = useState(false);
 
   const t = I18N[lang];
 
@@ -54,11 +88,12 @@ export function App() {
     return () => window.clearTimeout(timer);
   }, []);
 
-  // 1-second clock tick for reset countdowns, age indicator, and manual refresh cooldown
+  // 1-second clock tick for reset countdowns, age indicator, and manual refresh/sync cooldowns
   useEffect(() => {
     const timer = window.setInterval(() => {
       setNowEpoch(Math.floor(Date.now() / 1000));
       setCooldown((prev) => (prev > 0 ? prev - 1 : 0));
+      setCostCooldown((prev) => (prev > 0 ? prev - 1 : 0));
     }, 1000);
     return () => window.clearInterval(timer);
   }, []);
@@ -159,15 +194,15 @@ export function App() {
     [demoMode, session.authenticated]
   );
 
-  // Bounded O(1) snapshot fetch on login/demo switch + 20s periodic poll
+  // Bounded O(1) snapshot fetch ONLY when on subscription usage view
   useEffect(() => {
-    if (!session.authenticated && !demoMode) return;
+    if ((!session.authenticated && !demoMode) || activeView !== "usage") return;
     void loadUsage(false);
     const timer = window.setInterval(() => {
       void loadUsage(false);
     }, 20000);
     return () => window.clearInterval(timer);
-  }, [demoMode, loadUsage, session.authenticated]);
+  }, [activeView, demoMode, loadUsage, session.authenticated]);
 
   async function handleLogout() {
     if (demoMode) {
@@ -192,15 +227,57 @@ export function App() {
 
   const handleModalChanged = useCallback(() => loadUsage(false), [loadUsage]);
   const handleAlertsClose = useCallback(() => setAlertsModalOpen(false), []);
+  const handleCostKeysClose = useCallback(() => setCostKeysModalOpen(false), []);
+  const handleCostKeysChanged = useCallback(
+    () => setCostReloadVersion((v) => v + 1),
+    []
+  );
+  const handleSessionExpired = useCallback(() => {
+    setSession((prev) => ({ ...prev, authenticated: false, user: null }));
+    setDashboard(null);
+  }, []);
+
+  const handleCostStatusUpdate = useCallback(
+    (meta: {
+      busy: boolean;
+      error: boolean;
+      cooldown: number;
+      lastSyncedAt: number | null;
+    }) => {
+      setCostBusy(meta.busy);
+      setCostError(meta.error);
+      if (meta.cooldown > 0) setCostCooldown(meta.cooldown);
+      setCostLastSyncedAt(meta.lastSyncedAt);
+    },
+    []
+  );
+
+  const registerCostSyncHandler = useCallback((fn: () => Promise<void>) => {
+    costSyncHandlerRef.current = fn;
+  }, []);
 
   const showDashboard = session.authenticated || demoMode;
   const providers = dashboard?.providers ?? [];
-  const anyBad =
-    serverError || (providers.length > 0 && providers.some((p) => !p.ok));
+  const isCostView = showDashboard && activeView === "costs";
+
+  const anyBad = isCostView
+    ? costError
+    : serverError || (providers.length > 0 && providers.some((p) => !p.ok));
+  const dotBusy = isCostView ? costBusy : busy;
 
   function renderStatusText(): string {
+    if (!showDashboard) return serverError ? t.noServer : t.title;
+    if (isCostView) {
+      if (costError) return t.unknown;
+      if (demoMode) return t.demoMode;
+      if (costBusy) return t.connecting;
+      if (costLastSyncedAt != null) {
+        const age = Math.max(0, nowEpoch - costLastSyncedAt);
+        return t.ok + t.age(age);
+      }
+      return t.ok;
+    }
     if (serverError) return t.noServer;
-    if (!showDashboard) return t.title;
     if (!dashboard) return t.connecting;
     if (demoMode) return t.demoMode;
     if (!providers.length) return t.noData;
@@ -213,7 +290,9 @@ export function App() {
   return (
     <>
       <div
-        className={`screen ${bootingAnim ? "boot" : ""} ${flickAnim ? "flick" : ""}`}
+        className={`screen ${isCostView ? "screen-wide" : ""} ${
+          bootingAnim ? "boot" : ""
+        } ${flickAnim ? "flick" : ""}`}
       >
         <div className="sweep" />
 
@@ -234,21 +313,48 @@ export function App() {
         ) : (
           <>
             <div className="topbar">
-              <div className="topbar-user">
+              <div className="topbar-left">
                 <span className="badge">
                   {demoMode ? t.demoMode : session.user?.username}
                 </span>
+                <nav className="view-switch" aria-label="Dashboard View">
+                  <button
+                    type="button"
+                    className={`view-tab ${activeView === "usage" ? "active" : ""}`}
+                    onClick={() => setActiveView("usage")}
+                  >
+                    {t.nav.subscriptions}
+                  </button>
+                  <button
+                    type="button"
+                    className={`view-tab ${activeView === "costs" ? "active" : ""}`}
+                    onClick={() => setActiveView("costs")}
+                  >
+                    {t.nav.costs}
+                  </button>
+                </nav>
               </div>
+
               <div className="topbar-actions">
                 {!demoMode && (
                   <>
-                    <button
-                      type="button"
-                      className="btn primary"
-                      onClick={() => openConnectModal(null)}
-                    >
-                      {t.accounts.manageBtn}
-                    </button>
+                    {activeView === "usage" ? (
+                      <button
+                        type="button"
+                        className="btn primary"
+                        onClick={() => openConnectModal(null)}
+                      >
+                        {t.accounts.manageBtn}
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="btn primary"
+                        onClick={() => setCostKeysModalOpen(true)}
+                      >
+                        {t.costs.manageKeysBtn}
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="btn"
@@ -264,53 +370,65 @@ export function App() {
               </div>
             </div>
 
-            <div id="panels">
-              {providers.length > 0 ? (
-                providers.map((p) => (
-                  <UsagePanel
-                    key={p.id}
-                    provider={p}
-                    lang={lang}
-                    nowEpoch={nowEpoch}
-                  />
-                ))
-              ) : (
-                <div className="empty-box">
-                  <div className="empty-title">{t.noData}</div>
-                  <div className="empty-hint">{t.noDataHint}</div>
-                  {!demoMode && (
-                    <div className="quick-connect-row">
-                      <button
-                        type="button"
-                        className="btn primary"
-                        onClick={() => openConnectModal("claude")}
-                      >
-                        + Claude
-                      </button>
-                      <button
-                        type="button"
-                        className="btn primary"
-                        onClick={() => openConnectModal("codex")}
-                      >
-                        + Codex
-                      </button>
-                      <button
-                        type="button"
-                        className="btn primary"
-                        onClick={() => openConnectModal("gemini")}
-                      >
-                        + Gemini
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
+            {activeView === "costs" ? (
+              <CostDashboard
+                lang={lang}
+                demoMode={demoMode}
+                reloadVersion={costReloadVersion}
+                onOpenKeysModal={() => setCostKeysModalOpen(true)}
+                onSessionExpired={handleSessionExpired}
+                onStatusUpdate={handleCostStatusUpdate}
+                registerSyncHandler={registerCostSyncHandler}
+              />
+            ) : (
+              <div id="panels">
+                {providers.length > 0 ? (
+                  providers.map((p) => (
+                    <UsagePanel
+                      key={p.id}
+                      provider={p}
+                      lang={lang}
+                      nowEpoch={nowEpoch}
+                    />
+                  ))
+                ) : (
+                  <div className="empty-box">
+                    <div className="empty-title">{t.noData}</div>
+                    <div className="empty-hint">{t.noDataHint}</div>
+                    {!demoMode && (
+                      <div className="quick-connect-row">
+                        <button
+                          type="button"
+                          className="btn primary"
+                          onClick={() => openConnectModal("claude")}
+                        >
+                          + Claude
+                        </button>
+                        <button
+                          type="button"
+                          className="btn primary"
+                          onClick={() => openConnectModal("codex")}
+                        >
+                          + Codex
+                        </button>
+                        <button
+                          type="button"
+                          className="btn primary"
+                          onClick={() => openConnectModal("gemini")}
+                        >
+                          + Gemini
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </>
         )}
 
         <footer>
-          <span className={`dot ${anyBad ? "bad" : ""} ${busy ? "busy" : ""}`} />
+          <span className={`dot ${anyBad ? "bad" : ""} ${dotBusy ? "busy" : ""}`} />
           <span>{renderStatusText()}</span>
 
           <span className="swatches">
@@ -342,16 +460,34 @@ export function App() {
             {t.otherLang}
           </button>
 
-          {showDashboard && (
-            <button
-              type="button"
-              className="btn"
-              disabled={busy || (!demoMode && cooldown > 0)}
-              onClick={() => void loadUsage(true)}
-            >
-              {!demoMode && cooldown > 0 ? t.cooldown(cooldown) : t.refresh}
-            </button>
-          )}
+          {showDashboard &&
+            (activeView === "costs" ? (
+              <button
+                type="button"
+                className="btn"
+                disabled={costBusy || (!demoMode && costCooldown > 0)}
+                onClick={() => {
+                  if (costSyncHandlerRef.current) {
+                    void costSyncHandlerRef.current();
+                  }
+                }}
+              >
+                {!demoMode && costCooldown > 0
+                  ? t.costs.syncCooldown(costCooldown)
+                  : demoMode
+                  ? t.refresh
+                  : t.costs.syncBtn}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="btn"
+                disabled={busy || (!demoMode && cooldown > 0)}
+                onClick={() => void loadUsage(true)}
+              >
+                {!demoMode && cooldown > 0 ? t.cooldown(cooldown) : t.refresh}
+              </button>
+            ))}
         </footer>
       </div>
 
@@ -368,6 +504,15 @@ export function App() {
 
       {alertsModalOpen && !demoMode && (
         <AlertsModal lang={lang} onClose={handleAlertsClose} />
+      )}
+
+      {costKeysModalOpen && !demoMode && (
+        <CostKeysModal
+          lang={lang}
+          nowEpoch={nowEpoch}
+          onClose={handleCostKeysClose}
+          onChanged={handleCostKeysChanged}
+        />
       )}
     </>
   );
