@@ -11,9 +11,10 @@ from fastapi.staticfiles import StaticFiles
 
 from .alerts import DnsResolver
 from .config import Settings, load_settings
+from .cost_service import CostService
 from .crypto import CredentialCipher
 from .database import Database
-from .routers import alerts, auth, oauth, usage
+from .routers import alerts, auth, costs, oauth, usage
 from .usage_service import UsageService
 
 
@@ -50,11 +51,18 @@ def create_app(
             http_client=http_client,
             dns_resolver=dns_resolver,
         )
+        cost_svc = CostService(
+            db=db,
+            settings=cfg,
+            http_client=http_client,
+            alert_manager=svc.alert_manager,
+        )
 
         app.state.settings = cfg
         app.state.db = db
         app.state.http_client = http_client
         app.state.usage_service = svc
+        app.state.cost_service = cost_svc
 
         poller_task: asyncio.Task[None] | None = None
         if cfg.enable_background_poller:
@@ -77,11 +85,12 @@ def create_app(
 
     app = FastAPI(
         title="AI Usage Web API",
-        version="2.1.0",
+        version="2.2.0",
         description=(
-            "Multi-user remote AI subscription usage monitor supporting Claude, ChatGPT (Codex), "
-            "and Google Gemini OAuth with Single-flight automatic token refresh, 24h SQLite trends, "
-            "burn-rate exhaustion prediction, and proactive Discord/Slack/Telegram webhook alerts."
+            "Multi-user remote AI subscription & multi-provider API cost monitor supporting "
+            "Claude, ChatGPT (Codex), Google Gemini OAuth, Anthropic Admin, OpenAI Organization, "
+            "OpenRouter, and custom telemetry ingest with single-query O(1) SQLite aggregations, "
+            "24h trends, burn-rate prediction, and proactive SSRF-safe webhook alerts."
         ),
         lifespan=lifespan,
     )
@@ -90,6 +99,7 @@ def create_app(
     app.include_router(oauth.router)
     app.include_router(usage.router)
     app.include_router(alerts.router)
+    app.include_router(costs.router)
 
     dist_dir = cfg.frontend_dist_dir
     assets_dir = dist_dir / "assets"

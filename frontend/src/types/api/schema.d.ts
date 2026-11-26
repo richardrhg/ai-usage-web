@@ -107,6 +107,126 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/costs/budget": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Update Cost Budget */
+        put: operations["updateCostBudget"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/costs/drilldown": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Cost Drilldown */
+        get: operations["getCostDrilldown"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/costs/ingest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ingest Cost Records */
+        post: operations["ingestCostRecords"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/costs/keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Cost Keys */
+        get: operations["listCostApiKeys"];
+        put?: never;
+        /** Create Cost Key */
+        post: operations["createCostApiKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/costs/keys/{key_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Cost Key */
+        delete: operations["deleteCostApiKey"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/costs/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Cost Summary */
+        get: operations["getCostSummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/costs/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Sync Cost Usage */
+        post: operations["syncCostUsage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/oauth/codex/poll": {
         parameters: {
             query?: never;
@@ -382,6 +502,430 @@ export interface components {
             authenticated: boolean;
             user?: components["schemas"]["UserOut"] | null;
         };
+        /** CostApiKeyCreateRequest */
+        CostApiKeyCreateRequest: {
+            /**
+             * Api Key
+             * @default
+             */
+            api_key: string;
+            /** Label */
+            label: string;
+            /**
+             * Provider
+             * @enum {string}
+             */
+            provider: "anthropic_admin" | "openai_org" | "openrouter" | "custom_ingest";
+        };
+        /** CostApiKeyCreateResponse */
+        CostApiKeyCreateResponse: {
+            /** Generated Secret */
+            generated_secret?: string | null;
+            key: components["schemas"]["CostApiKeyOut"];
+        };
+        /** CostApiKeyDeleteResponse */
+        CostApiKeyDeleteResponse: {
+            /** Deleted */
+            deleted: boolean;
+            /** Id */
+            id: number;
+        };
+        /** CostApiKeyListResponse */
+        CostApiKeyListResponse: {
+            /** Keys */
+            keys?: components["schemas"]["CostApiKeyOut"][];
+            /**
+             * Monthly Budget Usd
+             * @default 0
+             */
+            monthly_budget_usd: number;
+        };
+        /** CostApiKeyOut */
+        CostApiKeyOut: {
+            /** Created At */
+            created_at: number;
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /** Id */
+            id: number;
+            /** Label */
+            label: string;
+            /** Last Error */
+            last_error?: string | null;
+            /** Last Synced At */
+            last_synced_at?: number | null;
+            /** Masked Key */
+            masked_key: string;
+            /**
+             * Provider
+             * @enum {string}
+             */
+            provider: "anthropic_admin" | "openai_org" | "openrouter" | "custom_ingest";
+        };
+        /** CostBudgetUpdateRequest */
+        CostBudgetUpdateRequest: {
+            /** Monthly Budget Usd */
+            monthly_budget_usd: number;
+        };
+        /** CostDailyPointOut */
+        CostDailyPointOut: {
+            /** By Provider */
+            by_provider?: {
+                [key: string]: number;
+            };
+            /**
+             * Cached Tokens
+             * @default 0
+             */
+            cached_tokens: number;
+            /** Date */
+            date: string;
+            /**
+             * Input Tokens
+             * @default 0
+             */
+            input_tokens: number;
+            /**
+             * Output Tokens
+             * @default 0
+             */
+            output_tokens: number;
+            /**
+             * Total Cost Usd
+             * @default 0
+             */
+            total_cost_usd: number;
+        };
+        /** CostDrilldownDayOut */
+        CostDrilldownDayOut: {
+            /**
+             * Cached Tokens
+             * @default 0
+             */
+            cached_tokens: number;
+            /**
+             * Cost Usd
+             * @default 0
+             */
+            cost_usd: number;
+            /** Date */
+            date: string;
+            /**
+             * Input Tokens
+             * @default 0
+             */
+            input_tokens: number;
+            /**
+             * Output Tokens
+             * @default 0
+             */
+            output_tokens: number;
+            /**
+             * Total Tokens
+             * @default 0
+             */
+            total_tokens: number;
+        };
+        /** CostDrilldownResponse */
+        CostDrilldownResponse: {
+            /** Daily Breakdown */
+            daily_breakdown?: components["schemas"]["CostDrilldownDayOut"][];
+            /**
+             * Days
+             * @enum {integer}
+             */
+            days: 7 | 30 | 90;
+            /**
+             * Group By
+             * @enum {string}
+             */
+            group_by: "provider" | "model" | "key";
+            /** Group Label */
+            group_label: string;
+            /** Group Value */
+            group_value: string;
+            /**
+             * Is Demo
+             * @default false
+             */
+            is_demo: boolean;
+            /** Sub Breakdown */
+            sub_breakdown?: components["schemas"]["CostDrilldownSubItemOut"][];
+            /**
+             * Sub Breakdown Kind
+             * @enum {string}
+             */
+            sub_breakdown_kind: "model" | "key";
+            /**
+             * Total Cost Usd
+             * @default 0
+             */
+            total_cost_usd: number;
+            /**
+             * Total Tokens
+             * @default 0
+             */
+            total_tokens: number;
+        };
+        /** CostDrilldownSubItemOut */
+        CostDrilldownSubItemOut: {
+            /**
+             * Cached Tokens
+             * @default 0
+             */
+            cached_tokens: number;
+            /**
+             * Cost Usd
+             * @default 0
+             */
+            cost_usd: number;
+            /**
+             * Input Tokens
+             * @default 0
+             */
+            input_tokens: number;
+            /** Key */
+            key: string;
+            /** Label */
+            label: string;
+            /**
+             * Output Tokens
+             * @default 0
+             */
+            output_tokens: number;
+            /** Provider */
+            provider?: string | null;
+            /**
+             * Share Pct
+             * @default 0
+             */
+            share_pct: number;
+            /**
+             * Total Tokens
+             * @default 0
+             */
+            total_tokens: number;
+        };
+        /** CostGroupRowOut */
+        CostGroupRowOut: {
+            /**
+             * Cached Tokens
+             * @default 0
+             */
+            cached_tokens: number;
+            /**
+             * Cost Usd
+             * @default 0
+             */
+            cost_usd: number;
+            /** Group Key */
+            group_key: string;
+            /** Group Label */
+            group_label: string;
+            /**
+             * Input Tokens
+             * @default 0
+             */
+            input_tokens: number;
+            /** Key Id */
+            key_id?: number | null;
+            /** Masked Key */
+            masked_key?: string | null;
+            /**
+             * Output Tokens
+             * @default 0
+             */
+            output_tokens: number;
+            /** Provider */
+            provider?: string | null;
+            /**
+             * Record Days
+             * @default 0
+             */
+            record_days: number;
+            /**
+             * Share Pct
+             * @default 0
+             */
+            share_pct: number;
+            /**
+             * Total Tokens
+             * @default 0
+             */
+            total_tokens: number;
+        };
+        /** CostIngestItem */
+        CostIngestItem: {
+            /**
+             * Cached Tokens
+             * @default 0
+             */
+            cached_tokens: number;
+            /** Cost Usd */
+            cost_usd?: number | null;
+            /**
+             * Input Tokens
+             * @default 0
+             */
+            input_tokens: number;
+            /** Model */
+            model: string;
+            /**
+             * Output Tokens
+             * @default 0
+             */
+            output_tokens: number;
+            /** Provider */
+            provider: string;
+            /** Usage Date */
+            usage_date: string;
+        };
+        /** CostIngestRequest */
+        CostIngestRequest: {
+            /** Key Id */
+            key_id?: number | null;
+            /** Records */
+            records: components["schemas"]["CostIngestItem"][];
+        };
+        /** CostIngestResponse */
+        CostIngestResponse: {
+            budget: components["schemas"]["MonthlyBudgetStatusOut"];
+            /** Key Id */
+            key_id: number;
+            /**
+             * Ok
+             * @default true
+             */
+            ok: boolean;
+            /** Upserted Count */
+            upserted_count: number;
+        };
+        /** CostSummaryResponse */
+        CostSummaryResponse: {
+            /** Available Providers */
+            available_providers?: string[];
+            /**
+             * Bound Keys Count
+             * @default 0
+             */
+            bound_keys_count: number;
+            budget: components["schemas"]["MonthlyBudgetStatusOut"];
+            /** Daily Series */
+            daily_series?: components["schemas"]["CostDailyPointOut"][];
+            /**
+             * Days
+             * @enum {integer}
+             */
+            days: 7 | 30 | 90;
+            /** End Date */
+            end_date: string;
+            /**
+             * Group By
+             * @enum {string}
+             */
+            group_by: "provider" | "model" | "key";
+            /** Groups */
+            groups?: components["schemas"]["CostGroupRowOut"][];
+            /**
+             * Is Demo
+             * @default false
+             */
+            is_demo: boolean;
+            /** Last Synced At */
+            last_synced_at?: number | null;
+            /** Orderby */
+            orderby: string;
+            /** Provider Filter */
+            provider_filter?: string | null;
+            /** Skip */
+            skip: number;
+            /** Start Date */
+            start_date: string;
+            /**
+             * Sync Cooldown Remaining
+             * @default 0
+             */
+            sync_cooldown_remaining: number;
+            /**
+             * Sync Cooldown Seconds
+             * @default 0
+             */
+            sync_cooldown_seconds: number;
+            /** Top */
+            top: number;
+            /** Total Count */
+            total_count: number;
+            totals: components["schemas"]["CostTotalsOut"];
+        };
+        /** CostSyncResponse */
+        CostSyncResponse: {
+            /**
+             * Cooldown Active
+             * @default false
+             */
+            cooldown_active: boolean;
+            /** Key Errors */
+            key_errors?: {
+                [key: string]: string;
+            };
+            /**
+             * Ok
+             * @default true
+             */
+            ok: boolean;
+            summary: components["schemas"]["CostSummaryResponse"];
+            /**
+             * Sync Cooldown Remaining
+             * @default 0
+             */
+            sync_cooldown_remaining: number;
+            /**
+             * Sync Cooldown Seconds
+             * @default 0
+             */
+            sync_cooldown_seconds: number;
+            /**
+             * Synced Keys
+             * @default 0
+             */
+            synced_keys: number;
+            /**
+             * Upserted Rows
+             * @default 0
+             */
+            upserted_rows: number;
+        };
+        /** CostTotalsOut */
+        CostTotalsOut: {
+            /**
+             * Cached Tokens
+             * @default 0
+             */
+            cached_tokens: number;
+            /**
+             * Cost Usd
+             * @default 0
+             */
+            cost_usd: number;
+            /**
+             * Input Tokens
+             * @default 0
+             */
+            input_tokens: number;
+            /**
+             * Output Tokens
+             * @default 0
+             */
+            output_tokens: number;
+            /**
+             * Total Tokens
+             * @default 0
+             */
+            total_tokens: number;
+        };
         /** DashboardUsageResponse */
         DashboardUsageResponse: {
             /** Connections */
@@ -439,6 +983,37 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /** MonthlyBudgetStatusOut */
+        MonthlyBudgetStatusOut: {
+            /** Active Threshold Pct */
+            active_threshold_pct?: number | null;
+            /**
+             * Month To Date Usd
+             * @default 0
+             */
+            month_to_date_usd: number;
+            /**
+             * Monthly Budget Usd
+             * @default 0
+             */
+            monthly_budget_usd: number;
+            /**
+             * Projected Month Usd
+             * @default 0
+             */
+            projected_month_usd: number;
+            /** Projected Pct */
+            projected_pct?: number | null;
+            /** Utilization Pct */
+            utilization_pct?: number | null;
+            /**
+             * Will Exceed Budget
+             * @default false
+             */
+            will_exceed_budget: boolean;
+            /** Year Month */
+            year_month: string;
         };
         /** OAuthCodeSubmitRequest */
         OAuthCodeSubmitRequest: {
@@ -814,6 +1389,279 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AuthSessionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    updateCostBudget: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CostBudgetUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MonthlyBudgetStatusOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    getCostDrilldown: {
+        parameters: {
+            query: {
+                /** @description 點擊展開列所屬之分組維度 */
+                group_by: "provider" | "model" | "key";
+                /** @description 展開列之鍵值 */
+                group_value: string;
+                /** @description 明細彙總天數區間（7 / 30 / 90） */
+                days?: number;
+                /** @description 選用的平台篩選條件 */
+                provider?: string | null;
+                /** @description 回傳免登入 Demo 明細資料 */
+                demo?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CostDrilldownResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ingestCostRecords: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "X-API-Key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CostIngestRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CostIngestResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    listCostApiKeys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CostApiKeyListResponse"];
+                };
+            };
+        };
+    };
+    createCostApiKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CostApiKeyCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CostApiKeyCreateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    deleteCostApiKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CostApiKeyDeleteResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    getCostSummary: {
+        parameters: {
+            query?: {
+                /** @description 彙總天數區間（7 / 30 / 90） */
+                days?: number;
+                /** @description 單次 GROUP BY 分組維度（provider / model / key） */
+                group_by?: "provider" | "model" | "key";
+                /** @description 依平台篩選（例如 anthropic / openai / openrouter） */
+                provider?: string | null;
+                /** @description 排序欄位與方向（例如 cost_usd desc） */
+                orderby?: string;
+                /** @description 單頁筆數上限 */
+                top?: number;
+                /** @description 分頁略過筆數 */
+                skip?: number;
+                /** @description 回傳免登入多平台 API 帳單展示資料 */
+                demo?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CostSummaryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    syncCostUsage: {
+        parameters: {
+            query?: {
+                days?: number;
+                group_by?: "provider" | "model" | "key";
+                provider?: string | null;
+                orderby?: string;
+                top?: number;
+                skip?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CostSyncResponse"];
                 };
             };
             /** @description Validation Error */

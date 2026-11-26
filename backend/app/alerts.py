@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import date as dt_date
 import hashlib
 import ipaddress
 import socket
@@ -624,3 +625,69 @@ class AlertManager:
             message=msg,
             now=ts,
         )
+
+    async def evaluate_budget_alerts(
+        self,
+        user_id: int,
+        *,
+        today: dt_date | None = None,
+        now: int | None = None,
+    ) -> int:
+        cfg = self.db.get_alert_settings(user_id)
+        if not cfg.enabled or not self._has_any_channel(cfg):
+            return 0
+
+        budget_status = self.db.get_monthly_budget_status(user_id, today=today)
+        if budget_status.monthly_budget_usd <= 0.0 or budget_status.active_threshold_pct is None:
+            return 0
+
+        threshold_pct = int(budget_status.active_threshold_pct)
+        util_pct = budget_status.utilization_pct or 0.0
+        proj_pct = budget_status.projected_pct or 0.0
+
+        if util_pct >= threshold_pct:
+            trigger_kind = "actual"
+            msg = (
+                f"[AI 帳單預算告警] {budget_status.year_month} 當月累積花費已達 "
+                f"${budget_status.month_to_date_usd:.2f} / ${budget_status.monthly_budget_usd:.2f}"
+                f"（{util_pct:.1f}%，跨越 {threshold_pct}% 門檻；月底預測 ${budget_status.projected_month_usd:.2f}）"
+            )
+        else:
+            trigger_kind = "projected"
+            msg = (
+                f"[AI 帳單預測預警] {budget_status.year_month} 目前累積 "
+                f"${budget_status.month_to_date_usd:.2f}，線性預測月底將達 "
+                f"${budget_status.projected_month_usd:.2f} / ${budget_status.monthly_budget_usd:.2f}"
+                f"（{proj_pct:.1f}%，跨越 {threshold_pct}% 門檻）"
+            )
+
+        ts = now if now is not None else int(time.time())
+        alert_id = self.db.claim_cost_budget_alert(
+            user_id=user_id,
+            year_month=budget_status.year_month,
+            threshold_pct=threshold_pct,
+            trigger_kind=trigger_kind,
+            actual_usd=budget_status.month_to_date_usd,
+            projected_usd=budget_status.projected_month_usd,
+            budget_usd=budget_status.monthly_budget_usd,
+            message=msg,
+            created_at=ts,
+        )
+        if alert_id is None:
+            return 0
+
+        delivered, _ = await self.dispatch_message(cfg, msg)
+        if not delivered:
+            self.db.delete_cost_budget_alert(alert_id)
+            return 0
+
+        self.db.finalize_cost_budget_alert_channels(
+            alert_id=alert_id,
+            user_id=user_id,
+            year_month=budget_status.year_month,
+            threshold_pct=threshold_pct,
+            message=msg,
+            channels=delivered,
+            created_at=ts,
+        )
+        return 1

@@ -4,6 +4,7 @@ from typing import Any
 
 from fastapi import Depends, HTTPException, Request, status
 
+from .cost_service import CostService
 from .crypto import hash_session_token
 from .database import Database
 from .usage_service import UsageService
@@ -15,6 +16,10 @@ def get_db(request: Request) -> Database:
 
 def get_usage_service(request: Request) -> UsageService:
     return request.app.state.usage_service
+
+
+def get_cost_service(request: Request) -> CostService:
+    return request.app.state.cost_service
 
 
 def get_optional_user(

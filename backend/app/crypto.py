@@ -57,6 +57,24 @@ def hash_session_token(raw_token: str) -> str:
     return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
 
 
+def generate_ingest_key() -> str:
+    return f"cai_live_{secrets.token_urlsafe(24)}"
+
+
+def mask_api_key(raw_key: str) -> str:
+    cleaned = raw_key.strip()
+    if not cleaned:
+        return "***"
+    if len(cleaned) <= 8:
+        return f"***{cleaned[-2:]}"
+    suffix = cleaned[-4:]
+    lower = cleaned.lower()
+    for prefix in ("sk-ant-", "sk-or-", "sk-", "cai_"):
+        if lower.startswith(prefix):
+            return f"{cleaned[:len(prefix)]}...{suffix}"
+    return f"{cleaned[:3]}...{suffix}"
+
+
 def generate_pkce_pair() -> tuple[str, str]:
     verifier = secrets.token_urlsafe(48)
     digest = hashlib.sha256(verifier.encode("ascii")).digest()
