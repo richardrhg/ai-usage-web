@@ -1,6 +1,292 @@
 {
   "components": {
     "schemas": {
+      "AlertEventOut": {
+        "properties": {
+          "alert_level": {
+            "title": "Alert Level",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "integer"
+          },
+          "delivered_channels": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Delivered Channels",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "resets_at": {
+            "title": "Resets At",
+            "type": "integer"
+          },
+          "window_key": {
+            "title": "Window Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "provider",
+          "window_key",
+          "alert_level",
+          "resets_at",
+          "message",
+          "created_at"
+        ],
+        "title": "AlertEventOut",
+        "type": "object"
+      },
+      "AlertSettingsPayload": {
+        "properties": {
+          "burn_rate_threshold_per_hour": {
+            "default": 25.0,
+            "maximum": 500.0,
+            "minimum": 1.0,
+            "title": "Burn Rate Threshold Per Hour",
+            "type": "number"
+          },
+          "critical_threshold": {
+            "default": 90.0,
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Critical Threshold",
+            "type": "number"
+          },
+          "discord_webhook_url": {
+            "default": "",
+            "maxLength": 2048,
+            "title": "Discord Webhook Url",
+            "type": "string"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "notify_on_burn_rate": {
+            "default": true,
+            "title": "Notify On Burn Rate",
+            "type": "boolean"
+          },
+          "notify_on_reauth": {
+            "default": true,
+            "title": "Notify On Reauth",
+            "type": "boolean"
+          },
+          "slack_webhook_url": {
+            "default": "",
+            "maxLength": 2048,
+            "title": "Slack Webhook Url",
+            "type": "string"
+          },
+          "telegram_chat_id": {
+            "default": "",
+            "maxLength": 128,
+            "title": "Telegram Chat Id",
+            "type": "string"
+          },
+          "telegram_webhook_url": {
+            "default": "",
+            "maxLength": 2048,
+            "title": "Telegram Webhook Url",
+            "type": "string"
+          },
+          "warn_threshold": {
+            "default": 75.0,
+            "maximum": 99.0,
+            "minimum": 1.0,
+            "title": "Warn Threshold",
+            "type": "number"
+          }
+        },
+        "title": "AlertSettingsPayload",
+        "type": "object"
+      },
+      "AlertSettingsResponse": {
+        "properties": {
+          "burn_rate_threshold_per_hour": {
+            "default": 25.0,
+            "maximum": 500.0,
+            "minimum": 1.0,
+            "title": "Burn Rate Threshold Per Hour",
+            "type": "number"
+          },
+          "critical_threshold": {
+            "default": 90.0,
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Critical Threshold",
+            "type": "number"
+          },
+          "discord_webhook_url": {
+            "default": "",
+            "maxLength": 2048,
+            "title": "Discord Webhook Url",
+            "type": "string"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "notify_on_burn_rate": {
+            "default": true,
+            "title": "Notify On Burn Rate",
+            "type": "boolean"
+          },
+          "notify_on_reauth": {
+            "default": true,
+            "title": "Notify On Reauth",
+            "type": "boolean"
+          },
+          "recent_events": {
+            "items": {
+              "$ref": "#/components/schemas/AlertEventOut"
+            },
+            "title": "Recent Events",
+            "type": "array"
+          },
+          "slack_webhook_url": {
+            "default": "",
+            "maxLength": 2048,
+            "title": "Slack Webhook Url",
+            "type": "string"
+          },
+          "telegram_chat_id": {
+            "default": "",
+            "maxLength": 128,
+            "title": "Telegram Chat Id",
+            "type": "string"
+          },
+          "telegram_webhook_url": {
+            "default": "",
+            "maxLength": 2048,
+            "title": "Telegram Webhook Url",
+            "type": "string"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "warn_threshold": {
+            "default": 75.0,
+            "maximum": 99.0,
+            "minimum": 1.0,
+            "title": "Warn Threshold",
+            "type": "number"
+          }
+        },
+        "title": "AlertSettingsResponse",
+        "type": "object"
+      },
+      "AlertTestRequest": {
+        "properties": {
+          "discord_webhook_url": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Discord Webhook Url"
+          },
+          "slack_webhook_url": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slack Webhook Url"
+          },
+          "telegram_chat_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Telegram Chat Id"
+          },
+          "telegram_webhook_url": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Telegram Webhook Url"
+          }
+        },
+        "title": "AlertTestRequest",
+        "type": "object"
+      },
+      "AlertTestResponse": {
+        "properties": {
+          "delivered_channels": {
+            "items": {
+              "enum": [
+                "discord",
+                "slack",
+                "telegram"
+              ],
+              "type": "string"
+            },
+            "title": "Delivered Channels",
+            "type": "array"
+          },
+          "errors": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Errors",
+            "type": "object"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "AlertTestResponse",
+        "type": "object"
+      },
       "AuthCredentialsRequest": {
         "properties": {
           "password": {
@@ -82,6 +368,11 @@
             },
             "title": "Providers",
             "type": "array"
+          },
+          "refresh_cooldown_remaining": {
+            "default": 0,
+            "title": "Refresh Cooldown Remaining",
+            "type": "integer"
           },
           "refresh_cooldown_seconds": {
             "default": 0,
@@ -529,6 +820,17 @@
             "title": "Ok",
             "type": "boolean"
           },
+          "peak_burn_rate_per_hour": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Peak Burn Rate Per Hour"
+          },
           "plan": {
             "anyOf": [
               {
@@ -540,6 +842,17 @@
             ],
             "title": "Plan"
           },
+          "projected_exhaustion_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Projected Exhaustion At"
+          },
           "source": {
             "anyOf": [
               {
@@ -550,6 +863,18 @@
               }
             ],
             "title": "Source"
+          },
+          "trend_24h": {
+            "items": {
+              "$ref": "#/components/schemas/TrendPointOut"
+            },
+            "title": "Trend 24H",
+            "type": "array"
+          },
+          "will_exhaust_before_reset": {
+            "default": false,
+            "title": "Will Exhaust Before Reset",
+            "type": "boolean"
           },
           "windows": {
             "items": {
@@ -567,8 +892,39 @@
         "title": "ProviderUsageOut",
         "type": "object"
       },
+      "TrendPointOut": {
+        "properties": {
+          "t": {
+            "title": "T",
+            "type": "integer"
+          },
+          "v": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "V",
+            "type": "number"
+          }
+        },
+        "required": [
+          "t",
+          "v"
+        ],
+        "title": "TrendPointOut",
+        "type": "object"
+      },
       "UsageWindowOut": {
         "properties": {
+          "burn_rate_per_hour": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Burn Rate Per Hour"
+          },
           "kind": {
             "anyOf": [
               {
@@ -599,6 +955,17 @@
             "title": "Percent",
             "type": "number"
           },
+          "projected_exhaustion_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Projected Exhaustion At"
+          },
           "reset_epoch": {
             "anyOf": [
               {
@@ -609,6 +976,18 @@
               }
             ],
             "title": "Reset Epoch"
+          },
+          "trend_points": {
+            "items": {
+              "$ref": "#/components/schemas/TrendPointOut"
+            },
+            "title": "Trend Points",
+            "type": "array"
+          },
+          "will_exhaust_before_reset": {
+            "default": false,
+            "title": "Will Exhaust Before Reset",
+            "type": "boolean"
           },
           "win": {
             "anyOf": [
@@ -695,12 +1074,120 @@
     }
   },
   "info": {
-    "description": "Multi-user remote AI subscription usage monitor supporting Claude, ChatGPT (Codex), and Google Gemini OAuth with Single-flight automatic token refresh.",
+    "description": "Multi-user remote AI subscription usage monitor supporting Claude, ChatGPT (Codex), and Google Gemini OAuth with Single-flight automatic token refresh, 24h SQLite trends, burn-rate exhaustion prediction, and proactive Discord/Slack/Telegram webhook alerts.",
     "title": "AI Usage Web API",
-    "version": "2.0.0"
+    "version": "2.1.0"
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/alerts/settings": {
+      "get": {
+        "operationId": "getAlertSettings",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Alert Settings",
+        "tags": [
+          "alerts"
+        ]
+      },
+      "put": {
+        "operationId": "updateAlertSettings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AlertSettingsPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Alert Settings",
+        "tags": [
+          "alerts"
+        ]
+      }
+    },
+    "/api/alerts/test": {
+      "post": {
+        "operationId": "sendTestAlert",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/AlertTestRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertTestResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Send Test Alert",
+        "tags": [
+          "alerts"
+        ]
+      }
+    },
     "/api/auth/login": {
       "post": {
         "operationId": "loginUser",
@@ -1022,14 +1509,26 @@
         "operationId": "getDashboardUsage",
         "parameters": [
           {
-            "description": "回傳三平台展示假資料",
+            "description": "回傳三平台展示假資料（含 24h 趨勢與燃燒率預測）",
             "in": "query",
             "name": "demo",
             "required": false,
             "schema": {
               "default": false,
-              "description": "回傳三平台展示假資料",
+              "description": "回傳三平台展示假資料（含 24h 趨勢與燃燒率預測）",
               "title": "Demo",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "手動觸發即時重新整理（受每使用者 30 秒冷卻保護）",
+            "in": "query",
+            "name": "refresh",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "手動觸發即時重新整理（受每使用者 30 秒冷卻保護）",
+              "title": "Refresh",
               "type": "boolean"
             }
           }

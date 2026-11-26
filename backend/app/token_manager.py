@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Awaitable, Callable, Protocol
 
 import httpx
 
@@ -53,11 +53,15 @@ class TokenManager:
         settings: Settings,
         refreshers: dict[ProviderId, ProviderOAuthRefresher],
         http_client: httpx.AsyncClient,
+        on_terminal_failure: (
+            Callable[[int, ProviderId, StoredCredential, str], Awaitable[None]] | None
+        ) = None,
     ) -> None:
         self.db = db
         self.settings = settings
         self.refreshers = refreshers
         self.http_client = http_client
+        self.on_terminal_failure = on_terminal_failure
         self._locks: dict[tuple[int, ProviderId], asyncio.Lock] = {}
 
     def _lock_for(self, user_id: int, provider: ProviderId) -> asyncio.Lock:
@@ -127,6 +131,8 @@ class TokenManager:
                 )
                 if not matched:
                     return self.db.get_credential(user_id, provider)
+                if exc.terminal and self.on_terminal_failure is not None:
+                    await self.on_terminal_failure(user_id, provider, latest, str(exc))
                 raise
             except Exception as exc:
                 matched = self.db.mark_credential_status(

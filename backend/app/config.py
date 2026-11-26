@@ -35,6 +35,9 @@ class Settings:
     poll_interval_seconds: int = 120
     refresh_cooldown_seconds: int = 30
     proactive_refresh_buffer_seconds: int = 300
+    history_min_interval_seconds: int = 60
+    history_retention_days: int = 30
+    allow_private_webhook_targets: bool = False
     session_ttl_seconds: int = 30 * 86400
     cookie_name: str = "ai_usage_session"
     cookie_secure: bool = False
@@ -59,6 +62,12 @@ def load_settings() -> Settings:
         refresh_cooldown_seconds=max(5, int(os.environ.get("REFRESH_COOLDOWN_SECONDS", "30"))),
         proactive_refresh_buffer_seconds=max(
             60, int(os.environ.get("PROACTIVE_REFRESH_BUFFER_SECONDS", "300"))
+        ),
+        history_min_interval_seconds=max(
+            0, int(os.environ.get("HISTORY_MIN_INTERVAL_SECONDS", "60"))
+        ),
+        history_retention_days=max(
+            1, int(os.environ.get("HISTORY_RETENTION_DAYS", "30"))
         ),
         session_ttl_seconds=max(3600, int(os.environ.get("SESSION_TTL_SECONDS", str(30 * 86400)))),
         cookie_secure=os.environ.get("COOKIE_SECURE", "0").strip().lower() in {"1", "true", "yes"},

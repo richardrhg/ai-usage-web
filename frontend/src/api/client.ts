@@ -6,9 +6,15 @@ export type DashboardUsageResponse = components["schemas"]["DashboardUsageRespon
 export type ProviderUsageOut = components["schemas"]["ProviderUsageOut"];
 export type ProviderConnectionOut = components["schemas"]["ProviderConnectionOut"];
 export type UsageWindowOut = components["schemas"]["UsageWindowOut"];
+export type TrendPointOut = components["schemas"]["TrendPointOut"];
 export type OAuthStartResponse = components["schemas"]["OAuthStartResponse"];
 export type OAuthFlowStatusResponse = components["schemas"]["OAuthFlowStatusResponse"];
 export type DisconnectResponse = components["schemas"]["DisconnectResponse"];
+export type AlertSettingsPayload = components["schemas"]["AlertSettingsPayload"];
+export type AlertSettingsResponse = components["schemas"]["AlertSettingsResponse"];
+export type AlertTestRequest = components["schemas"]["AlertTestRequest"];
+export type AlertTestResponse = components["schemas"]["AlertTestResponse"];
+export type AlertEventOut = components["schemas"]["AlertEventOut"];
 export type ProviderId = ProviderConnectionOut["provider"];
 
 export class ApiError extends Error {
@@ -76,18 +82,20 @@ export const api = {
   },
 
   /**
-   * Single-shot O(1) dashboard endpoint: fetches all bound providers' usage windows
-   * AND connection/token-refresh statuses in one request (never per-item N+1).
+   * Single-shot O(1) dashboard endpoint: fetches all bound providers' usage windows,
+   * downsampled 24h sparklines, burn-rate exhaustion predictions, AND connection statuses
+   * in a single HTTP request (never per-item N+1).
    */
-  getDashboardUsage(demo = false): Promise<DashboardUsageResponse> {
-    const query = demo ? "?demo=true" : "";
-    return requestJson<DashboardUsageResponse>(`/api/usage${query}`);
+  getDashboardUsage(demo = false, refresh = false): Promise<DashboardUsageResponse> {
+    const params = new URLSearchParams();
+    if (demo) params.set("demo", "true");
+    if (refresh) params.set("refresh", "true");
+    const qs = params.toString();
+    return requestJson<DashboardUsageResponse>(`/api/usage${qs ? `?${qs}` : ""}`);
   },
 
   refreshDashboardUsage(): Promise<DashboardUsageResponse> {
-    return requestJson<DashboardUsageResponse>("/api/usage/refresh", {
-      method: "POST",
-    });
+    return requestJson<DashboardUsageResponse>("/api/usage?refresh=true");
   },
 
   startProviderOAuth(provider: ProviderId): Promise<OAuthStartResponse> {
@@ -124,6 +132,24 @@ export const api = {
   disconnectProviderOAuth(provider: ProviderId): Promise<DisconnectResponse> {
     return requestJson<DisconnectResponse>(`/api/oauth/${provider}`, {
       method: "DELETE",
+    });
+  },
+
+  getAlertSettings(): Promise<AlertSettingsResponse> {
+    return requestJson<AlertSettingsResponse>("/api/alerts/settings");
+  },
+
+  updateAlertSettings(payload: AlertSettingsPayload): Promise<AlertSettingsResponse> {
+    return requestJson<AlertSettingsResponse>("/api/alerts/settings", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  sendTestAlert(payload?: AlertTestRequest): Promise<AlertTestResponse> {
+    return requestJson<AlertTestResponse>("/api/alerts/test", {
+      method: "POST",
+      body: JSON.stringify(payload ?? {}),
     });
   },
 };
