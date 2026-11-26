@@ -322,6 +322,11 @@ export function CostDashboard({
     setDrilldownError(null);
   }, [days, groupBy, providerFilter, demoMode, reloadVersion]);
 
+  // Invalidate cached lazy drilldowns whenever managed keys/budgets or mode change
+  useEffect(() => {
+    setDrilldownCache({});
+  }, [demoMode, reloadVersion]);
+
   const fetchSummary = useCallback(async () => {
     setLoading(true);
     setError(null);

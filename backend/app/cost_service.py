@@ -111,6 +111,93 @@ def _normalize_anthropic_model_from_desc(desc: str) -> str:
     return cleaned if cleaned else "anthropic-unknown"
 
 
+def _normalize_billing_model_prefix(raw_line: str) -> str:
+    base = raw_line.strip().lower().split(",")[0].split("|")[0].strip()
+    for suffix in (
+        " cached input",
+        " batch input",
+        " batch output",
+        " input",
+        " output",
+        " cached",
+        " tokens",
+        " usage",
+    ):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)].strip()
+    return base
+
+
+def _match_models_for_billing_line(
+    raw_line: str,
+    candidate_models: Sequence[str],
+    *,
+    provider: str,
+) -> list[str]:
+    base = _normalize_billing_model_prefix(raw_line)
+    if not base:
+        return []
+
+    exact = [m for m in candidate_models if m.strip().lower() == base]
+    if exact:
+        return exact
+
+    if provider == "anthropic":
+        desc_lower = raw_line.strip().lower()
+        matched: list[str] = []
+        for m in candidate_models:
+            ml = m.strip().lower()
+            if (
+                ml in desc_lower
+                or ("opus" in desc_lower and "opus" in ml)
+                or ("haiku" in desc_lower and "haiku" in ml)
+                or ("sonnet" in desc_lower and "sonnet" in ml)
+            ):
+                matched.append(m)
+        return matched
+
+    family: list[str] = []
+    for m in candidate_models:
+        ml = m.strip().lower()
+        if ("mini" in base) != ("mini" in ml):
+            continue
+        if ("nano" in base) != ("nano" in ml):
+            continue
+        if ml.startswith(base + "-") or base.startswith(ml + "-"):
+            family.append(m)
+    return family
+
+
+def _allocate_billed_usd(
+    usd_val: float,
+    matched_models: Sequence[str],
+    udate: str,
+    token_lookup: dict[tuple[str, str], tuple[int, int, int]],
+    allocated_costs: dict[tuple[str, str], float],
+) -> None:
+    clean_val = round(max(0.0, float(usd_val)), 6)
+    if len(matched_models) == 1:
+        m = matched_models[0]
+        allocated_costs[(udate, m)] = round(allocated_costs.get((udate, m), 0.0) + clean_val, 6)
+        return
+
+    weights: list[float] = []
+    for m in matched_models:
+        inp, outp, cached = token_lookup.get((udate, m), (0, 0, 0))
+        est = estimate_model_cost_usd(m, inp, outp, cached)
+        weights.append(est if est > 0.0 else float(max(1, inp + outp + cached)))
+
+    total_w = sum(weights)
+    remaining = clean_val
+    for idx, m in enumerate(matched_models):
+        if idx == len(matched_models) - 1 or total_w <= 0.0:
+            share = round(max(0.0, remaining), 6)
+        else:
+            share = round(clean_val * (weights[idx] / total_w), 6)
+            remaining = round(remaining - share, 6)
+        allocated_costs[(udate, m)] = round(allocated_costs.get((udate, m), 0.0) + share, 6)
+
+
 async def sync_anthropic_admin_usage(
     api_key: str,
     http_client: httpx.AsyncClient,
@@ -128,11 +215,12 @@ async def sync_anthropic_admin_usage(
 
     token_buckets: dict[tuple[str, str], tuple[int, int, int, float | None]] = {}
     page_token: str | None = None
-    for _ in range(5):
+    for _ in range(20):
         params: list[tuple[str, str]] = [
             ("starting_at", start_iso),
             ("ending_at", end_iso),
             ("bucket_width", "1d"),
+            ("limit", "31"),
             ("group_by[]", "model"),
         ]
         if page_token:
@@ -206,19 +294,39 @@ async def sync_anthropic_admin_usage(
             break
         page_token = str(next_page)
 
-    # Optional Anthropic Cost Report enrichment (amount in cents string per Anthropic spec, or cost_usd)
+    # Paginate Anthropic Cost Report across all pages before reconciling costs
+    token_counts_only: dict[tuple[str, str], tuple[int, int, int]] = {
+        k: (v[0], v[1], v[2]) for k, v in token_buckets.items()
+    }
     cost_overrides: dict[tuple[str, str], float] = {}
-    cost_resp = await http_client.get(
-        "https://api.anthropic.com/v1/organizations/cost_report",
-        headers=headers,
-        params=[
+    covered_models: set[tuple[str, str]] = set()
+    billed_dates: set[str] = set()
+    cost_report_complete = False
+    cost_page_token: str | None = None
+
+    for page_idx in range(20):
+        cparams: list[tuple[str, str]] = [
             ("starting_at", start_iso),
             ("ending_at", end_iso),
             ("bucket_width", "1d"),
+            ("limit", "31"),
             ("group_by[]", "description"),
-        ],
-    )
-    if cost_resp.status_code == 200:
+        ]
+        if cost_page_token:
+            cparams.append(("page", cost_page_token))
+
+        cost_resp = await http_client.get(
+            "https://api.anthropic.com/v1/organizations/cost_report",
+            headers=headers,
+            params=cparams,
+        )
+        if cost_resp.status_code in (401, 403, 404) and page_idx == 0:
+            break
+        if cost_resp.status_code >= 400:
+            raise RuntimeError(
+                f"Anthropic Admin Cost Report API 回應 HTTP {cost_resp.status_code}: {cost_resp.text[:160]}"
+            )
+
         cost_payload = cost_resp.json()
         cost_buckets = cost_payload.get("data") if isinstance(cost_payload, dict) else []
         if isinstance(cost_buckets, list):
@@ -245,38 +353,58 @@ async def sync_anthropic_admin_usage(
                         usd_val = float(citem["amount"]) / 100.0
                     if usd_val is None:
                         continue
+                    billed_dates.add(udate)
 
-                    raw_model = str(citem.get("model") or "").strip()
-                    if not raw_model:
-                        desc = str(citem.get("description") or "")
-                        matched_existing = [
-                            m
-                            for (d_k, m) in token_buckets.keys()
-                            if d_k == udate
-                            and (
-                                m.lower() in desc.lower()
-                                or ("sonnet" in desc.lower() and "sonnet" in m.lower())
-                                or ("opus" in desc.lower() and "opus" in m.lower())
-                                or ("haiku" in desc.lower() and "haiku" in m.lower())
-                            )
-                        ]
-                        raw_model = (
-                            matched_existing[0]
-                            if len(matched_existing) == 1
-                            else _normalize_anthropic_model_from_desc(desc)
-                        )
-                    cost_overrides[(udate, raw_model)] = round(
-                        cost_overrides.get((udate, raw_model), 0.0) + usd_val, 6
+                    day_candidates = sorted(
+                        m for (d_k, m) in token_buckets.keys() if d_k == udate
                     )
+                    raw_model = str(citem.get("model") or "").strip()
+                    label_for_match = raw_model or str(citem.get("description") or "")
+                    matched = _match_models_for_billing_line(
+                        label_for_match,
+                        day_candidates,
+                        provider="anthropic",
+                    )
+                    if matched:
+                        _allocate_billed_usd(
+                            usd_val,
+                            matched,
+                            udate,
+                            token_counts_only,
+                            cost_overrides,
+                        )
+                        for m in matched:
+                            covered_models.add((udate, m))
+                    else:
+                        fallback_model = (
+                            raw_model
+                            if raw_model
+                            else _normalize_anthropic_model_from_desc(
+                                str(citem.get("description") or "")
+                            )
+                        )
+                        cost_overrides[(udate, fallback_model)] = round(
+                            cost_overrides.get((udate, fallback_model), 0.0) + usd_val, 6
+                        )
+
+        has_more = bool(cost_payload.get("has_more")) if isinstance(cost_payload, dict) else False
+        next_page = cost_payload.get("next_page") if isinstance(cost_payload, dict) else None
+        if not has_more or not next_page:
+            cost_report_complete = True
+            break
+        cost_page_token = str(next_page)
 
     records: list[DailyCostRecord] = []
     seen_keys = set(token_buckets.keys()) | set(cost_overrides.keys())
     for udate, model in sorted(seen_keys):
         inp, outp, cached, explicit_usd = token_buckets.get((udate, model), (0, 0, 0, None))
-        if (udate, model) in cost_overrides:
-            final_cost = cost_overrides[(udate, model)]
+        if (udate, model) in cost_overrides or (udate, model) in covered_models:
+            final_cost = cost_overrides.get((udate, model), 0.0)
         elif explicit_usd is not None:
             final_cost = explicit_usd
+        elif cost_report_complete and udate in billed_dates:
+            # Date already has authoritative billed line items; avoid double-counting estimates
+            final_cost = 0.0
         else:
             final_cost = estimate_model_cost_usd(model, inp, outp, cached)
 
@@ -319,11 +447,13 @@ async def sync_openai_org_usage(
 
     token_map: dict[tuple[str, str], tuple[int, int, int]] = {}
     cost_map: dict[tuple[str, str], float] = {}
+    covered_models: set[tuple[str, str]] = set()
+    billed_dates: set[str] = set()
 
     usage_ok = False
     usage_err = ""
     page_cursor: str | None = None
-    for _ in range(5):
+    for page_idx in range(20):
         params: dict[str, str | int] = {
             "start_time": start_epoch,
             "end_time": end_epoch,
@@ -340,6 +470,8 @@ async def sync_openai_org_usage(
         )
         if resp.status_code >= 400:
             usage_err = f"OpenAI Usage API HTTP {resp.status_code}: {resp.text[:160]}"
+            if page_idx > 0:
+                raise RuntimeError(usage_err)
             break
         usage_ok = True
         payload = resp.json()
@@ -376,9 +508,10 @@ async def sync_openai_org_usage(
         page_cursor = str(next_page)
 
     costs_ok = False
+    costs_complete = False
     costs_err = ""
     cost_cursor: str | None = None
-    for _ in range(5):
+    for page_idx in range(20):
         cparams: dict[str, str | int] = {
             "start_time": start_epoch,
             "end_time": end_epoch,
@@ -395,6 +528,8 @@ async def sync_openai_org_usage(
         )
         if cresp.status_code >= 400:
             costs_err = f"OpenAI Costs API HTTP {cresp.status_code}: {cresp.text[:160]}"
+            if page_idx > 0:
+                raise RuntimeError(costs_err)
             break
         costs_ok = True
         cpayload = cresp.json()
@@ -413,32 +548,47 @@ async def sync_openai_org_usage(
                     udate = _extract_iso_date(citem.get("start_time") or citem.get("date")) or b_date
                     if not udate:
                         continue
-                    raw_line = str(
-                        citem.get("line_item") or citem.get("model") or "openai-billing"
-                    ).strip()
                     amt_obj = citem.get("amount")
                     if isinstance(amt_obj, dict):
                         val = float(amt_obj.get("value") or 0.0)
                     elif citem.get("cost_usd") is not None:
                         val = float(citem["cost_usd"])
+                    elif amt_obj is not None:
+                        val = float(amt_obj)
                     else:
-                        val = float(amt_obj or 0.0)
+                        continue
+                    billed_dates.add(udate)
+                    raw_line = str(
+                        citem.get("line_item") or citem.get("model") or "openai-billing"
+                    ).strip()
 
-                    # Match line_item to exact model name in token_map on same date when possible
-                    matched_models = [
-                        m
-                        for (d_k, m) in token_map.keys()
-                        if d_k == udate
-                        and (m.lower() == raw_line.lower() or raw_line.lower() in m.lower() or m.lower() in raw_line.lower())
-                    ]
-                    target_model = matched_models[0] if len(matched_models) == 1 else raw_line
-                    cost_map[(udate, target_model)] = round(
-                        cost_map.get((udate, target_model), 0.0) + val, 6
+                    day_candidates = sorted(
+                        m for (d_k, m) in token_map.keys() if d_k == udate
                     )
+                    matched_models = _match_models_for_billing_line(
+                        raw_line,
+                        day_candidates,
+                        provider="openai",
+                    )
+                    if matched_models:
+                        _allocate_billed_usd(
+                            val,
+                            matched_models,
+                            udate,
+                            token_map,
+                            cost_map,
+                        )
+                        for m in matched_models:
+                            covered_models.add((udate, m))
+                    else:
+                        cost_map[(udate, raw_line)] = round(
+                            cost_map.get((udate, raw_line), 0.0) + val, 6
+                        )
 
         has_more = bool(cpayload.get("has_more")) if isinstance(cpayload, dict) else False
         next_page = cpayload.get("next_page") if isinstance(cpayload, dict) else None
         if not has_more or not next_page:
+            costs_complete = True
             break
         cost_cursor = str(next_page)
 
@@ -449,8 +599,11 @@ async def sync_openai_org_usage(
     all_keys = set(token_map.keys()) | set(cost_map.keys())
     for udate, model in sorted(all_keys):
         inp, outp, cached = token_map.get((udate, model), (0, 0, 0))
-        if (udate, model) in cost_map:
-            final_usd = cost_map[(udate, model)]
+        if (udate, model) in cost_map or (udate, model) in covered_models:
+            final_usd = cost_map.get((udate, model), 0.0)
+        elif costs_complete and udate in billed_dates:
+            # Date already has authoritative billed line items; never add duplicate estimates
+            final_usd = 0.0
         else:
             final_usd = estimate_model_cost_usd(model, inp, outp, cached)
         records.append(

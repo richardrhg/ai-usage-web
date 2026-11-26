@@ -667,3 +667,244 @@ def test_monthly_budget_webhook_alerts_deduplicate_by_year_month_and_threshold(
                 assert "2026-12" in delivered_hooks[0][1]["content"]
 
     asyncio.run(_run())
+
+
+def test_anthropic_cost_report_paginates_all_pages_and_reconciles_multi_snapshots() -> None:
+    from app.cost_service import sync_anthropic_admin_usage
+
+    async def _run() -> None:
+        cost_pages_requested: list[str | None] = []
+
+        async def mock_handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            page_param = request.url.params.get("page")
+            assert request.url.params.get("limit") == "31"
+
+            if "api.anthropic.com/v1/organizations/usage_report/messages" in url:
+                return httpx.Response(
+                    200,
+                    json={
+                        "data": [
+                            {
+                                "starting_at": "2026-11-01T00:00:00Z",
+                                "results": [
+                                    {
+                                        "model": "claude-sonnet-4-20250514",
+                                        "uncached_input_tokens": 1_000_000,
+                                        "output_tokens": 0,
+                                    },
+                                    {
+                                        "model": "claude-3-7-sonnet-20250219",
+                                        "uncached_input_tokens": 1_000_000,
+                                        "output_tokens": 0,
+                                    },
+                                ],
+                            },
+                            {
+                                "starting_at": "2026-11-12T00:00:00Z",
+                                "results": [
+                                    {
+                                        "model": "claude-sonnet-4-20250514",
+                                        "uncached_input_tokens": 1_000_000,
+                                        "output_tokens": 0,
+                                    }
+                                ],
+                            },
+                            {
+                                "starting_at": "2026-11-24T00:00:00Z",
+                                "results": [
+                                    {
+                                        "model": "claude-opus-4-1-20250805",
+                                        "uncached_input_tokens": 1_000_000,
+                                        "output_tokens": 0,
+                                    }
+                                ],
+                            },
+                        ],
+                        "has_more": False,
+                        "next_page": None,
+                    },
+                )
+
+            if "api.anthropic.com/v1/organizations/cost_report" in url:
+                cost_pages_requested.append(page_param)
+                if page_param is None:
+                    return httpx.Response(
+                        200,
+                        json={
+                            "data": [
+                                {
+                                    "starting_at": "2026-11-01T00:00:00Z",
+                                    "results": [
+                                        {
+                                            "description": "Claude Sonnet Usage",
+                                            "amount": "540.0",  # $5.40 across 2 Sonnet snapshots
+                                        }
+                                    ],
+                                }
+                            ],
+                            "has_more": True,
+                            "next_page": "cost_cursor_p2",
+                        },
+                    )
+                if page_param == "cost_cursor_p2":
+                    return httpx.Response(
+                        200,
+                        json={
+                            "data": [
+                                {
+                                    "starting_at": "2026-11-12T00:00:00Z",
+                                    "results": [
+                                        {
+                                            "description": "Claude Sonnet 4 Usage",
+                                            "amount": "275.0",  # $2.75 negotiated rate (not $3.00 est)
+                                        }
+                                    ],
+                                }
+                            ],
+                            "has_more": True,
+                            "next_page": "cost_cursor_p3",
+                        },
+                    )
+                if page_param == "cost_cursor_p3":
+                    return httpx.Response(
+                        200,
+                        json={
+                            "data": [
+                                {
+                                    "starting_at": "2026-11-24T00:00:00Z",
+                                    "results": [
+                                        {
+                                            "description": "Claude Opus 4.1 Usage",
+                                            "amount": "1250.0",  # $12.50 negotiated rate (not $15.00 est)
+                                        }
+                                    ],
+                                }
+                            ],
+                            "has_more": False,
+                            "next_page": None,
+                        },
+                    )
+            return httpx.Response(404)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock_handler)) as http_client:
+            records = await sync_anthropic_admin_usage(
+                "sk-ant-admin01-test",
+                http_client,
+                start_day=dt_date(2026, 11, 1),
+                end_day=dt_date(2026, 11, 25),
+            )
+
+        assert cost_pages_requested == [None, "cost_cursor_p2", "cost_cursor_p3"]
+        by_key = {(r.usage_date, r.model): r for r in records}
+        assert len(by_key) == 4
+        # Page 1 multi-snapshot allocation ($2.70 + $2.70 = $5.40, zero duplicate rows)
+        assert by_key[("2026-11-01", "claude-sonnet-4-20250514")].cost_usd == pytest.approx(2.70)
+        assert by_key[("2026-11-01", "claude-3-7-sonnet-20250219")].cost_usd == pytest.approx(2.70)
+        # Page 2 & Page 3 actual billed amounts preserved instead of falling back to estimates
+        assert by_key[("2026-11-12", "claude-sonnet-4-20250514")].cost_usd == pytest.approx(2.75)
+        assert by_key[("2026-11-24", "claude-opus-4-1-20250805")].cost_usd == pytest.approx(12.50)
+        assert sum(r.cost_usd for r in records) == pytest.approx(5.40 + 2.75 + 12.50)
+
+    asyncio.run(_run())
+
+
+def test_openai_aggregate_billing_line_reconciles_snapshots_without_double_counting() -> None:
+    from app.cost_service import sync_openai_org_usage
+
+    async def _run() -> None:
+        async def mock_handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if "api.openai.com/v1/organization/usage/completions" in url:
+                return httpx.Response(
+                    200,
+                    json={
+                        "data": [
+                            {
+                                "start_time": "2026-11-25T00:00:00Z",
+                                "results": [
+                                    {
+                                        "model": "gpt-4o-2024-05-13",
+                                        "input_tokens": 1_000_000,
+                                        "output_tokens": 0,
+                                        "input_cached_tokens": 0,
+                                    },
+                                    {
+                                        "model": "gpt-4o-2024-08-06",
+                                        "input_tokens": 1_000_000,
+                                        "output_tokens": 0,
+                                        "input_cached_tokens": 0,
+                                    },
+                                    {
+                                        "model": "gpt-4o-mini-2024-07-18",
+                                        "input_tokens": 1_000_000,
+                                        "output_tokens": 0,
+                                        "input_cached_tokens": 0,
+                                    },
+                                ],
+                            },
+                            {
+                                # Unfinalized today: usage tokens exist, costs bucket is still empty
+                                "start_time": "2026-11-26T00:00:00Z",
+                                "results": [
+                                    {
+                                        "model": "gpt-4o-2024-08-06",
+                                        "input_tokens": 400_000,
+                                        "output_tokens": 0,
+                                        "input_cached_tokens": 0,
+                                    }
+                                ],
+                            },
+                        ],
+                        "has_more": False,
+                    },
+                )
+            if "api.openai.com/v1/organization/costs" in url:
+                return httpx.Response(
+                    200,
+                    json={
+                        "data": [
+                            {
+                                "start_time": "2026-11-25T00:00:00Z",
+                                "results": [
+                                    {
+                                        "line_item": "gpt-4o",
+                                        "amount": {"value": 5.0, "currency": "usd"},
+                                    },
+                                    {
+                                        "line_item": "gpt-4o-mini, input",
+                                        "amount": {"value": 0.15, "currency": "usd"},
+                                    },
+                                ],
+                            },
+                            {
+                                "start_time": "2026-11-26T00:00:00Z",
+                                "results": [],
+                            },
+                        ],
+                        "has_more": False,
+                    },
+                )
+            return httpx.Response(404)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock_handler)) as http_client:
+            records = await sync_openai_org_usage(
+                "sk-admin-openai-test",
+                http_client,
+                start_day=dt_date(2026, 11, 25),
+                end_day=dt_date(2026, 11, 26),
+            )
+
+        by_key = {(r.usage_date, r.model): r for r in records}
+        # Must NOT emit a separate phantom ("2026-11-25", "gpt-4o") row on top of snapshots!
+        assert ("2026-11-25", "gpt-4o") not in by_key
+        assert by_key[("2026-11-25", "gpt-4o-2024-05-13")].cost_usd == pytest.approx(2.50)
+        assert by_key[("2026-11-25", "gpt-4o-2024-08-06")].cost_usd == pytest.approx(2.50)
+        assert by_key[("2026-11-25", "gpt-4o-mini-2024-07-18")].cost_usd == pytest.approx(0.15)
+        # Unbilled real-time today bucket (empty results: []) still estimates 0.4M * $2.50/M = $1.00
+        assert by_key[("2026-11-26", "gpt-4o-2024-08-06")].cost_usd == pytest.approx(1.00)
+        # Total across Nov 25 is exact $5.15 (never $10.15!) + $1.00 today = $6.15
+        assert sum(r.cost_usd for r in records) == pytest.approx(6.15)
+
+    asyncio.run(_run())
+
