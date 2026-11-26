@@ -13,7 +13,11 @@ router = APIRouter(prefix="/api/usage", tags=["usage"])
 
 @router.get("", response_model=DashboardUsageResponse, operation_id="getDashboardUsage")
 async def get_usage(
-    demo: bool = Query(default=False, description="回傳三平台展示假資料"),
+    demo: bool = Query(default=False, description="回傳三平台展示假資料（含 24h 趨勢與燃燒率預測）"),
+    refresh: bool = Query(
+        default=False,
+        description="手動觸發即時重新整理（受每使用者 30 秒冷卻保護）",
+    ),
     user: dict[str, Any] | None = Depends(get_optional_user),
     svc: UsageService = Depends(get_usage_service),
 ) -> DashboardUsageResponse:
@@ -24,7 +28,10 @@ async def get_usage(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="請先登入帳號，或切換至 Demo 預覽模式",
         )
-    return await svc.get_dashboard_for_user(int(user["id"]))
+    user_id = int(user["id"])
+    if refresh:
+        return await svc.refresh_user_dashboard(user_id)
+    return await svc.get_dashboard_for_user(user_id)
 
 
 @router.post("/refresh", response_model=DashboardUsageResponse, operation_id="refreshDashboardUsage")

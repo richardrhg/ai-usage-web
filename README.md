@@ -6,9 +6,11 @@
 支援**遠端架設、多人獨立帳號、網頁引導 OAuth 綁定與 Token 過期全自動續期**的「Claude + ChatGPT (Codex) + Gemini」訂閱額度監測儀表板，保留復古像素風與 CRT 動態視覺。
 
 - **支援三大平台訂閱配額**：Claude（5h / 7d / Opus / Sonnet / Extra Credits）、ChatGPT Codex（5h / 7d）、Google Gemini（各模型 24h 配額）
+- **24h 歷史趨勢 Sparkline 與燃燒率耗盡預測**：SQLite 時序記錄各額度視窗用量變化（內建 30 天自動淘汰與取樣最小間隔防膨脹），自動計算近期燃燒率（`%/hr`）並預測是否會在重置前耗盡（`預計 X 小時後耗盡` / `安全`）
+- **主動式 Discord / Slack / Telegram Webhook 告警**：支援門檻跨越（預設 `75%` 警告／`90%` 嚴重）、燃燒率飆升耗盡預警與 OAuth `refresh_token` 失效重連通知，具備每重置週期自動去重與嚴格 HTTPS SSRF 防護
 - **啟動即檢查 ＋ 過期自動續期（Single-flight Auto-Refresh）**：伺服器啟動時、到期前 5 分鐘與收到 `401` 時自動換發新 Token；內建每組帳號獨立互斥鎖，防止單次旋轉 `refresh_token` 併發衝突
-- **多人獨立帳號 ＋ 靜態加密儲存**：每位使用者註冊登入後僅能檢視與管理自己綁定的帳號，SQLite 內所有憑證皆以 `APP_SECRET_KEY`（Fernet 對稱驗證加密）加密存放，前端 API 永不回傳明文 Token
-- **嚴格單次聚合資料流（`O(1)`）與型別契約**：儀表板載入僅呼叫單一 `GET /api/usage` 端點取得全平台快照與連線狀態；前端 TypeScript 型別由後端 FastAPI OpenAPI 透過 `npm run gen:api` 自動產生
+- **多人獨立帳號 ＋ 靜態加密儲存**：每位使用者註冊登入後僅能檢視與管理自己綁定的帳號，SQLite 內所有憑證與 Webhook 密鑰網址皆以 `APP_SECRET_KEY`（Fernet 對稱驗證加密）加密存放，前端 API 永不回傳明文 Token
+- **嚴格單次聚合資料流（`O(1)`）與 30 秒重新整理冷卻**：儀表板載入僅呼叫單一 `GET /api/usage` 端點一次取得全平台額度、24h 降採樣趨勢曲線與連線狀態；`GET /api/usage?refresh=true` 內建每使用者 30 秒冷卻保護避免濫打上游 API；前端 TypeScript 型別由 `npm run gen:api` 自動產生
 
 ---
 

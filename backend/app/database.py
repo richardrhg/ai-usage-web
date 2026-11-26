@@ -8,8 +8,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
 
+from .analytics import HistorySample, make_window_key
 from .crypto import CredentialCipher
-from .schemas import ProviderId, ProviderUsageOut, RefreshStatus
+from .schemas import (
+    AlertEventOut,
+    AlertSettingsPayload,
+    AlertSettingsResponse,
+    ProviderId,
+    ProviderUsageOut,
+    RefreshStatus,
+)
 
 
 @dataclass
@@ -116,6 +124,46 @@ class Database:
                     fetched_at INTEGER NOT NULL,
                     PRIMARY KEY (user_id, provider)
                 );
+
+                CREATE TABLE IF NOT EXISTS usage_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    provider TEXT NOT NULL,
+                    window_key TEXT NOT NULL,
+                    window_label TEXT NOT NULL,
+                    percent REAL NOT NULL,
+                    reset_epoch INTEGER,
+                    recorded_at INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_usage_history_lookup
+                    ON usage_history(user_id, provider, recorded_at);
+
+                CREATE TABLE IF NOT EXISTS alert_settings (
+                    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    encrypted_webhooks TEXT NOT NULL,
+                    warn_threshold REAL NOT NULL DEFAULT 75.0,
+                    critical_threshold REAL NOT NULL DEFAULT 90.0,
+                    burn_rate_threshold_per_hour REAL NOT NULL DEFAULT 25.0,
+                    notify_on_burn_rate INTEGER NOT NULL DEFAULT 1,
+                    notify_on_reauth INTEGER NOT NULL DEFAULT 1,
+                    updated_at INTEGER NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS alert_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    provider TEXT NOT NULL,
+                    window_key TEXT NOT NULL,
+                    alert_level TEXT NOT NULL,
+                    resets_at INTEGER NOT NULL DEFAULT 0,
+                    message TEXT NOT NULL,
+                    delivered_channels TEXT NOT NULL DEFAULT '[]',
+                    created_at INTEGER NOT NULL,
+                    UNIQUE(user_id, provider, window_key, alert_level, resets_at)
+                );
+                CREATE INDEX IF NOT EXISTS idx_alert_events_user_time
+                    ON alert_events(user_id, created_at DESC);
                 """
             )
 
@@ -381,7 +429,8 @@ class Database:
             rows = conn.execute(
                 """
                 SELECT user_id, provider FROM provider_credentials
-                WHERE expires_at IS NULL OR expires_at <= ?
+                WHERE (expires_at IS NULL OR expires_at <= ?)
+                  AND refresh_status != 'expired'
                 """,
                 (threshold_epoch,),
             ).fetchall()
@@ -395,6 +444,10 @@ class Database:
             )
             conn.execute(
                 "DELETE FROM usage_snapshots WHERE user_id = ? AND provider = ?",
+                (user_id, provider),
+            )
+            conn.execute(
+                "DELETE FROM usage_history WHERE user_id = ? AND provider = ?",
                 (user_id, provider),
             )
             return cur.rowcount > 0
@@ -524,3 +577,271 @@ class Database:
             if latest_fetched is None or ts > latest_fetched:
                 latest_fetched = ts
         return snapshots, latest_fetched
+
+    # ── Time-Series Usage History (Indexed, Spacing-Limited & Auto-Pruned) ──
+    def record_usage_history(
+        self,
+        user_id: int,
+        usage: ProviderUsageOut,
+        recorded_at: int,
+        *,
+        min_interval_seconds: int = 60,
+        retention_days: int = 30,
+        expected_encrypted_payload: str | None = None,
+    ) -> int:
+        if not usage.ok or not usage.windows:
+            return 0
+
+        prune_before = recorded_at - max(1, retention_days) * 86400
+        inserted = 0
+        with self._conn() as conn:
+            if expected_encrypted_payload is not None:
+                still_valid = conn.execute(
+                    """
+                    SELECT 1 FROM provider_credentials
+                    WHERE user_id = ? AND provider = ? AND encrypted_payload = ?
+                    """,
+                    (user_id, usage.id, expected_encrypted_payload),
+                ).fetchone()
+                if not still_valid:
+                    return 0
+
+            conn.execute("DELETE FROM usage_history WHERE recorded_at < ?", (prune_before,))
+
+            for win in usage.windows:
+                wkey = make_window_key(win)
+                if min_interval_seconds > 0:
+                    last_row = conn.execute(
+                        """
+                        SELECT recorded_at, percent, reset_epoch
+                        FROM usage_history
+                        WHERE user_id = ? AND provider = ? AND window_key = ?
+                        ORDER BY recorded_at DESC
+                        LIMIT 1
+                        """,
+                        (user_id, usage.id, wkey),
+                    ).fetchone()
+                    if last_row is not None:
+                        elapsed = recorded_at - int(last_row["recorded_at"])
+                        prev_reset = (
+                            int(last_row["reset_epoch"])
+                            if last_row["reset_epoch"] is not None
+                            else None
+                        )
+                        same_reset = (
+                            prev_reset == win.reset_epoch
+                            or (
+                                prev_reset is not None
+                                and win.reset_epoch is not None
+                                and abs(prev_reset - win.reset_epoch) <= 600
+                            )
+                        )
+                        reset_dropped = float(win.percent) + 5.0 < float(last_row["percent"])
+                        if 0 <= elapsed < min_interval_seconds and same_reset and not reset_dropped:
+                            continue
+
+                conn.execute(
+                    """
+                    INSERT INTO usage_history (
+                        user_id, provider, window_key, window_label, percent, reset_epoch, recorded_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        user_id,
+                        usage.id,
+                        wkey,
+                        win.label,
+                        float(win.percent),
+                        win.reset_epoch,
+                        recorded_at,
+                    ),
+                )
+                inserted += 1
+        return inserted
+
+    def list_user_history_since(
+        self,
+        user_id: int,
+        since_epoch: int,
+    ) -> dict[ProviderId, dict[str, list[HistorySample]]]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT provider, window_key, percent, reset_epoch, recorded_at
+                FROM usage_history
+                WHERE user_id = ? AND recorded_at >= ?
+                ORDER BY recorded_at ASC
+                """,
+                (user_id, since_epoch),
+            ).fetchall()
+
+        grouped: dict[ProviderId, dict[str, list[HistorySample]]] = {}
+        for row in rows:
+            prov: ProviderId = row["provider"]
+            wkey = str(row["window_key"])
+            sample = HistorySample(
+                recorded_at=int(row["recorded_at"]),
+                percent=float(row["percent"]),
+                reset_epoch=int(row["reset_epoch"]) if row["reset_epoch"] is not None else None,
+            )
+            grouped.setdefault(prov, {}).setdefault(wkey, []).append(sample)
+        return grouped
+
+    # ── Proactive Webhook Alert Settings & Deduplicated Events ──────────────
+    def list_recent_alert_events(self, user_id: int, limit: int = 10) -> list[AlertEventOut]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, provider, window_key, alert_level, resets_at, message, delivered_channels, created_at
+                FROM alert_events
+                WHERE user_id = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+                """,
+                (user_id, limit),
+            ).fetchall()
+        out: list[AlertEventOut] = []
+        for row in rows:
+            try:
+                channels = json.loads(str(row["delivered_channels"] or "[]"))
+                if not isinstance(channels, list):
+                    channels = []
+            except Exception:
+                channels = []
+            out.append(
+                AlertEventOut(
+                    id=int(row["id"]),
+                    provider=str(row["provider"]),
+                    window_key=str(row["window_key"]),
+                    alert_level=str(row["alert_level"]),
+                    resets_at=int(row["resets_at"]),
+                    message=str(row["message"]),
+                    delivered_channels=[str(c) for c in channels],
+                    created_at=int(row["created_at"]),
+                )
+            )
+        return out
+
+    def get_alert_settings(self, user_id: int) -> AlertSettingsResponse:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM alert_settings WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+        recent = self.list_recent_alert_events(user_id, limit=8)
+        if row is None:
+            return AlertSettingsResponse(recent_events=recent)
+
+        hooks = self.cipher.decrypt_json(str(row["encrypted_webhooks"]))
+        return AlertSettingsResponse(
+            enabled=bool(row["enabled"]),
+            discord_webhook_url=str(hooks.get("discord_webhook_url") or ""),
+            slack_webhook_url=str(hooks.get("slack_webhook_url") or ""),
+            telegram_webhook_url=str(hooks.get("telegram_webhook_url") or ""),
+            telegram_chat_id=str(hooks.get("telegram_chat_id") or ""),
+            warn_threshold=float(row["warn_threshold"]),
+            critical_threshold=float(row["critical_threshold"]),
+            burn_rate_threshold_per_hour=float(row["burn_rate_threshold_per_hour"]),
+            notify_on_burn_rate=bool(row["notify_on_burn_rate"]),
+            notify_on_reauth=bool(row["notify_on_reauth"]),
+            updated_at=int(row["updated_at"]),
+            recent_events=recent,
+        )
+
+    def upsert_alert_settings(
+        self,
+        user_id: int,
+        payload: AlertSettingsPayload,
+    ) -> AlertSettingsResponse:
+        now = int(time.time())
+        encrypted = self.cipher.encrypt_json(
+            {
+                "discord_webhook_url": payload.discord_webhook_url.strip(),
+                "slack_webhook_url": payload.slack_webhook_url.strip(),
+                "telegram_webhook_url": payload.telegram_webhook_url.strip(),
+                "telegram_chat_id": payload.telegram_chat_id.strip(),
+            }
+        )
+        with self._conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO alert_settings (
+                    user_id, enabled, encrypted_webhooks, warn_threshold, critical_threshold,
+                    burn_rate_threshold_per_hour, notify_on_burn_rate, notify_on_reauth, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    enabled = excluded.enabled,
+                    encrypted_webhooks = excluded.encrypted_webhooks,
+                    warn_threshold = excluded.warn_threshold,
+                    critical_threshold = excluded.critical_threshold,
+                    burn_rate_threshold_per_hour = excluded.burn_rate_threshold_per_hour,
+                    notify_on_burn_rate = excluded.notify_on_burn_rate,
+                    notify_on_reauth = excluded.notify_on_reauth,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    user_id,
+                    1 if payload.enabled else 0,
+                    encrypted,
+                    float(payload.warn_threshold),
+                    float(payload.critical_threshold),
+                    float(payload.burn_rate_threshold_per_hour),
+                    1 if payload.notify_on_burn_rate else 0,
+                    1 if payload.notify_on_reauth else 0,
+                    now,
+                ),
+            )
+        return self.get_alert_settings(user_id)
+
+    def claim_alert_event(
+        self,
+        *,
+        user_id: int,
+        provider: str,
+        window_key: str,
+        alert_level: str,
+        resets_at: int,
+        message: str,
+        created_at: int,
+    ) -> int | None:
+        prune_before = created_at - 90 * 86400
+        with self._conn() as conn:
+            conn.execute("DELETE FROM alert_events WHERE created_at < ?", (prune_before,))
+            if resets_at > 0 and alert_level != "needs_reauth":
+                near_dup = conn.execute(
+                    """
+                    SELECT id FROM alert_events
+                    WHERE user_id = ? AND provider = ? AND window_key = ? AND alert_level = ?
+                      AND resets_at > 0 AND ABS(resets_at - ?) <= 120
+                    LIMIT 1
+                    """,
+                    (user_id, provider, window_key, alert_level, resets_at),
+                ).fetchone()
+                if near_dup is not None:
+                    return None
+
+            cur = conn.execute(
+                """
+                INSERT OR IGNORE INTO alert_events (
+                    user_id, provider, window_key, alert_level, resets_at, message, delivered_channels, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, '[]', ?)
+                """,
+                (user_id, provider, window_key, alert_level, resets_at, message, created_at),
+            )
+            if cur.rowcount == 0 or cur.lastrowid is None:
+                return None
+            return int(cur.lastrowid)
+
+    def finalize_alert_event_channels(self, event_id: int, channels: list[str]) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE alert_events SET delivered_channels = ? WHERE id = ?",
+                (json.dumps(channels), event_id),
+            )
+
+    def delete_alert_event(self, event_id: int) -> None:
+        with self._conn() as conn:
+            conn.execute("DELETE FROM alert_events WHERE id = ?", (event_id,))

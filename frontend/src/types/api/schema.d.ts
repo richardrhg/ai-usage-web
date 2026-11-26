@@ -4,6 +4,41 @@
  */
 
 export interface paths {
+    "/api/alerts/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Alert Settings */
+        get: operations["getAlertSettings"];
+        /** Update Alert Settings */
+        put: operations["updateAlertSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/alerts/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Send Test Alert */
+        post: operations["sendTestAlert"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/login": {
         parameters: {
             query?: never;
@@ -178,6 +213,157 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AlertEventOut */
+        AlertEventOut: {
+            /** Alert Level */
+            alert_level: string;
+            /** Created At */
+            created_at: number;
+            /** Delivered Channels */
+            delivered_channels?: string[];
+            /** Id */
+            id: number;
+            /** Message */
+            message: string;
+            /** Provider */
+            provider: string;
+            /** Resets At */
+            resets_at: number;
+            /** Window Key */
+            window_key: string;
+        };
+        /** AlertSettingsPayload */
+        AlertSettingsPayload: {
+            /**
+             * Burn Rate Threshold Per Hour
+             * @default 25
+             */
+            burn_rate_threshold_per_hour: number;
+            /**
+             * Critical Threshold
+             * @default 90
+             */
+            critical_threshold: number;
+            /**
+             * Discord Webhook Url
+             * @default
+             */
+            discord_webhook_url: string;
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /**
+             * Notify On Burn Rate
+             * @default true
+             */
+            notify_on_burn_rate: boolean;
+            /**
+             * Notify On Reauth
+             * @default true
+             */
+            notify_on_reauth: boolean;
+            /**
+             * Slack Webhook Url
+             * @default
+             */
+            slack_webhook_url: string;
+            /**
+             * Telegram Chat Id
+             * @default
+             */
+            telegram_chat_id: string;
+            /**
+             * Telegram Webhook Url
+             * @default
+             */
+            telegram_webhook_url: string;
+            /**
+             * Warn Threshold
+             * @default 75
+             */
+            warn_threshold: number;
+        };
+        /** AlertSettingsResponse */
+        AlertSettingsResponse: {
+            /**
+             * Burn Rate Threshold Per Hour
+             * @default 25
+             */
+            burn_rate_threshold_per_hour: number;
+            /**
+             * Critical Threshold
+             * @default 90
+             */
+            critical_threshold: number;
+            /**
+             * Discord Webhook Url
+             * @default
+             */
+            discord_webhook_url: string;
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /**
+             * Notify On Burn Rate
+             * @default true
+             */
+            notify_on_burn_rate: boolean;
+            /**
+             * Notify On Reauth
+             * @default true
+             */
+            notify_on_reauth: boolean;
+            /** Recent Events */
+            recent_events?: components["schemas"]["AlertEventOut"][];
+            /**
+             * Slack Webhook Url
+             * @default
+             */
+            slack_webhook_url: string;
+            /**
+             * Telegram Chat Id
+             * @default
+             */
+            telegram_chat_id: string;
+            /**
+             * Telegram Webhook Url
+             * @default
+             */
+            telegram_webhook_url: string;
+            /** Updated At */
+            updated_at?: number | null;
+            /**
+             * Warn Threshold
+             * @default 75
+             */
+            warn_threshold: number;
+        };
+        /** AlertTestRequest */
+        AlertTestRequest: {
+            /** Discord Webhook Url */
+            discord_webhook_url?: string | null;
+            /** Slack Webhook Url */
+            slack_webhook_url?: string | null;
+            /** Telegram Chat Id */
+            telegram_chat_id?: string | null;
+            /** Telegram Webhook Url */
+            telegram_webhook_url?: string | null;
+        };
+        /** AlertTestResponse */
+        AlertTestResponse: {
+            /** Delivered Channels */
+            delivered_channels?: ("discord" | "slack" | "telegram")[];
+            /** Errors */
+            errors?: {
+                [key: string]: string;
+            };
+            /** Ok */
+            ok: boolean;
+        };
         /** AuthCredentialsRequest */
         AuthCredentialsRequest: {
             /** Password */
@@ -209,6 +395,11 @@ export interface components {
             is_demo: boolean;
             /** Providers */
             providers: components["schemas"]["ProviderUsageOut"][];
+            /**
+             * Refresh Cooldown Remaining
+             * @default 0
+             */
+            refresh_cooldown_remaining: number;
             /**
              * Refresh Cooldown Seconds
              * @default 0
@@ -364,23 +555,52 @@ export interface components {
             name: string;
             /** Ok */
             ok: boolean;
+            /** Peak Burn Rate Per Hour */
+            peak_burn_rate_per_hour?: number | null;
             /** Plan */
             plan?: string | null;
+            /** Projected Exhaustion At */
+            projected_exhaustion_at?: number | null;
             /** Source */
             source?: string | null;
+            /** Trend 24H */
+            trend_24h?: components["schemas"]["TrendPointOut"][];
+            /**
+             * Will Exhaust Before Reset
+             * @default false
+             */
+            will_exhaust_before_reset: boolean;
             /** Windows */
             windows?: components["schemas"]["UsageWindowOut"][];
         };
+        /** TrendPointOut */
+        TrendPointOut: {
+            /** T */
+            t: number;
+            /** V */
+            v: number;
+        };
         /** UsageWindowOut */
         UsageWindowOut: {
+            /** Burn Rate Per Hour */
+            burn_rate_per_hour?: number | null;
             /** Kind */
             kind?: ("session" | "weekly" | "monthly" | "opus" | "fable" | "sonnet" | "model") | null;
             /** Label */
             label: string;
             /** Percent */
             percent: number;
+            /** Projected Exhaustion At */
+            projected_exhaustion_at?: number | null;
             /** Reset Epoch */
             reset_epoch?: number | null;
+            /** Trend Points */
+            trend_points?: components["schemas"]["TrendPointOut"][];
+            /**
+             * Will Exhaust Before Reset
+             * @default false
+             */
+            will_exhaust_before_reset: boolean;
             /** Win */
             win?: string | null;
         };
@@ -415,6 +635,92 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    getAlertSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertSettingsResponse"];
+                };
+            };
+        };
+    };
+    updateAlertSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AlertSettingsPayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertSettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    sendTestAlert: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["AlertTestRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertTestResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     loginUser: {
         parameters: {
             query?: never;
@@ -654,8 +960,10 @@ export interface operations {
     getDashboardUsage: {
         parameters: {
             query?: {
-                /** @description 回傳三平台展示假資料 */
+                /** @description 回傳三平台展示假資料（含 24h 趨勢與燃燒率預測） */
                 demo?: boolean;
+                /** @description 手動觸發即時重新整理（受每使用者 30 秒冷卻保護） */
+                refresh?: boolean;
             };
             header?: never;
             path?: never;

@@ -7,6 +7,7 @@ import {
   ProviderId,
 } from "./api/client";
 import { AccountsModal } from "./components/AccountsModal";
+import { AlertsModal } from "./components/AlertsModal";
 import { AuthPanel } from "./components/AuthPanel";
 import { UsagePanel } from "./components/UsagePanel";
 import { I18N, LANG_KEY, LangId, THEME_KEY, THEMES } from "./i18n/translations";
@@ -44,6 +45,7 @@ export function App() {
   const [modalInitialProvider, setModalInitialProvider] = useState<ProviderId | null>(
     null
   );
+  const [alertsModalOpen, setAlertsModalOpen] = useState(false);
 
   const t = I18N[lang];
 
@@ -138,9 +140,11 @@ export function App() {
         const data =
           isManualRefresh && !demoMode
             ? await api.refreshDashboardUsage()
-            : await api.getDashboardUsage(demoMode);
+            : await api.getDashboardUsage(demoMode, false);
         setDashboard(data);
-        setCooldown(data.refresh_cooldown_seconds || 0);
+        setCooldown(
+          data.refresh_cooldown_remaining ?? data.refresh_cooldown_seconds ?? 0
+        );
       } catch (err) {
         if (err instanceof ApiError && err.status === 401 && !demoMode) {
           setSession((prev) => ({ ...prev, authenticated: false, user: null }));
@@ -187,6 +191,7 @@ export function App() {
   }, []);
 
   const handleModalChanged = useCallback(() => loadUsage(false), [loadUsage]);
+  const handleAlertsClose = useCallback(() => setAlertsModalOpen(false), []);
 
   const showDashboard = session.authenticated || demoMode;
   const providers = dashboard?.providers ?? [];
@@ -236,13 +241,22 @@ export function App() {
               </div>
               <div className="topbar-actions">
                 {!demoMode && (
-                  <button
-                    type="button"
-                    className="btn primary"
-                    onClick={() => openConnectModal(null)}
-                  >
-                    {t.accounts.manageBtn}
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      className="btn primary"
+                      onClick={() => openConnectModal(null)}
+                    >
+                      {t.accounts.manageBtn}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => setAlertsModalOpen(true)}
+                    >
+                      {t.alerts.openBtn}
+                    </button>
+                  </>
                 )}
                 <button type="button" className="btn" onClick={handleLogout}>
                   {demoMode ? t.auth.exitDemo : t.auth.logout}
@@ -350,6 +364,10 @@ export function App() {
           onClose={handleModalClose}
           onChanged={handleModalChanged}
         />
+      )}
+
+      {alertsModalOpen && !demoMode && (
+        <AlertsModal lang={lang} onClose={handleAlertsClose} />
       )}
     </>
   );

@@ -9,10 +9,11 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from .alerts import DnsResolver
 from .config import Settings, load_settings
 from .crypto import CredentialCipher
 from .database import Database
-from .routers import auth, oauth, usage
+from .routers import alerts, auth, oauth, usage
 from .usage_service import UsageService
 
 
@@ -34,6 +35,7 @@ async def _background_poller_loop(svc: UsageService, interval_seconds: int) -> N
 def create_app(
     settings: Settings | None = None,
     http_transport: httpx.AsyncBaseTransport | None = None,
+    dns_resolver: DnsResolver | None = None,
 ) -> FastAPI:
     cfg = settings or load_settings()
 
@@ -42,7 +44,12 @@ def create_app(
         cipher = CredentialCipher(cfg.secret_key)
         db = Database(cfg.db_path, cipher)
         http_client = httpx.AsyncClient(timeout=20.0, transport=http_transport)
-        svc = UsageService(db=db, settings=cfg, http_client=http_client)
+        svc = UsageService(
+            db=db,
+            settings=cfg,
+            http_client=http_client,
+            dns_resolver=dns_resolver,
+        )
 
         app.state.settings = cfg
         app.state.db = db
@@ -70,10 +77,11 @@ def create_app(
 
     app = FastAPI(
         title="AI Usage Web API",
-        version="2.0.0",
+        version="2.1.0",
         description=(
             "Multi-user remote AI subscription usage monitor supporting Claude, ChatGPT (Codex), "
-            "and Google Gemini OAuth with Single-flight automatic token refresh."
+            "and Google Gemini OAuth with Single-flight automatic token refresh, 24h SQLite trends, "
+            "burn-rate exhaustion prediction, and proactive Discord/Slack/Telegram webhook alerts."
         ),
         lifespan=lifespan,
     )
@@ -81,6 +89,7 @@ def create_app(
     app.include_router(auth.router)
     app.include_router(oauth.router)
     app.include_router(usage.router)
+    app.include_router(alerts.router)
 
     dist_dir = cfg.frontend_dist_dir
     assets_dir = dist_dir / "assets"

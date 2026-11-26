@@ -6,6 +6,8 @@ from typing import Any
 
 import httpx
 
+from .alerts import AlertManager, DnsResolver, credential_fingerprint
+from .analytics import enrich_provider_with_history
 from .config import Settings
 from .database import Database, StoredCredential
 from .providers.base import UpstreamUnauthorizedError
@@ -20,6 +22,7 @@ from .schemas import (
     ProviderConnectionOut,
     ProviderId,
     ProviderUsageOut,
+    TrendPointOut,
     UsageWindowOut,
 )
 from .token_manager import TokenManager, TokenRefreshError
@@ -37,8 +40,73 @@ PROVIDER_OAUTH_METHODS: dict[ProviderId, OAuthMethod] = {
 }
 
 
+def _demo_sparkline(now: int, values: list[float]) -> list[TrendPointOut]:
+    count = len(values)
+    start = now - (count - 1) * 3600
+    return [
+        TrendPointOut(t=start + idx * 3600, v=round(max(0.0, min(100.0, val)), 1))
+        for idx, val in enumerate(values)
+    ]
+
+
 def build_demo_dashboard() -> DashboardUsageResponse:
     now = int(time.time())
+
+    claude_s_trend = _demo_sparkline(
+        now,
+        [
+            6, 9, 12, 14, 2, 4, 5, 7, 8, 10, 13, 15,
+            3, 4, 6, 7, 8, 9, 11, 12, 14, 15, 16.5, 18.0,
+        ],
+    )
+    claude_w_trend = _demo_sparkline(
+        now,
+        [
+            19, 20, 20.5, 21, 21.5, 22, 23, 23.5, 24, 25, 25.5, 26,
+            27, 27.5, 28, 29, 29.5, 30, 31, 31.5, 32, 33, 33.5, 34.0,
+        ],
+    )
+    claude_opus_trend = _demo_sparkline(
+        now,
+        [
+            28, 29, 30, 30.5, 31, 32, 33, 33.5, 34, 35, 36, 37,
+            38, 38.5, 39, 40, 41, 41.5, 42, 43, 44, 44.5, 45.2, 46.0,
+        ],
+    )
+
+    codex_s_trend = _demo_sparkline(
+        now,
+        [
+            18, 22, 28, 31, 5, 8, 12, 16, 21, 25, 29, 34,
+            6, 9, 12, 15, 19, 24, 31, 39, 48, 57, 66, 74.0,
+        ],
+    )
+    codex_w_trend = _demo_sparkline(
+        now,
+        [
+            62, 63, 64, 65, 66, 67, 68, 70, 71, 72, 74, 75,
+            76, 78, 79, 80, 82, 83, 85, 86, 88, 89, 90.2, 91.0,
+        ],
+    )
+
+    gemini_pro_trend = _demo_sparkline(
+        now,
+        [
+            4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+            16, 17, 18, 19, 20, 21, 22, 23.5, 24.5, 26, 27, 28.0,
+        ],
+    )
+    gemini_flash_trend = _demo_sparkline(
+        now,
+        [
+            1, 1.5, 2, 2, 2.5, 3, 3, 3.5, 4, 4.2, 4.5, 5,
+            5.2, 5.5, 6, 6.2, 6.5, 7, 7.2, 7.6, 8, 8.4, 8.7, 9.0,
+        ],
+    )
+
+    codex_s_exhaust = now + 4800  # 1h 20m (< 2h 10m reset!)
+    codex_w_exhaust = now + int((9.0 / 2.2) * 3600)  # ~4h 05m (< 3d reset!)
+
     providers = [
         ProviderUsageOut(
             id="claude",
@@ -48,6 +116,10 @@ def build_demo_dashboard() -> DashboardUsageResponse:
             source="demo",
             plan="Max",
             account_label="demo@claude.ai",
+            trend_24h=claude_s_trend,
+            peak_burn_rate_per_hour=3.6,
+            projected_exhaustion_at=None,
+            will_exhaust_before_reset=False,
             windows=[
                 UsageWindowOut(
                     label="Session (5h)",
@@ -55,6 +127,10 @@ def build_demo_dashboard() -> DashboardUsageResponse:
                     win="5h",
                     percent=18.0,
                     reset_epoch=now + 4 * 3600 + 25 * 60,
+                    burn_rate_per_hour=3.6,
+                    projected_exhaustion_at=now + int((82.0 / 3.6) * 3600),
+                    will_exhaust_before_reset=False,
+                    trend_points=claude_s_trend,
                 ),
                 UsageWindowOut(
                     label="Weekly (7d)",
@@ -62,6 +138,10 @@ def build_demo_dashboard() -> DashboardUsageResponse:
                     win="7d",
                     percent=34.0,
                     reset_epoch=now + 5 * 86400,
+                    burn_rate_per_hour=0.9,
+                    projected_exhaustion_at=now + int((66.0 / 0.9) * 3600),
+                    will_exhaust_before_reset=False,
+                    trend_points=claude_w_trend,
                 ),
                 UsageWindowOut(
                     label="Opus (7d)",
@@ -69,6 +149,10 @@ def build_demo_dashboard() -> DashboardUsageResponse:
                     win="7d",
                     percent=46.0,
                     reset_epoch=now + 5 * 86400,
+                    burn_rate_per_hour=1.2,
+                    projected_exhaustion_at=now + int((54.0 / 1.2) * 3600),
+                    will_exhaust_before_reset=False,
+                    trend_points=claude_opus_trend,
                 ),
             ],
             extra_usage=ExtraUsageOut(
@@ -87,6 +171,10 @@ def build_demo_dashboard() -> DashboardUsageResponse:
             source="demo",
             plan="Plus",
             account_label="demo@openai.com",
+            trend_24h=codex_s_trend,
+            peak_burn_rate_per_hour=19.5,
+            projected_exhaustion_at=codex_s_exhaust,
+            will_exhaust_before_reset=True,
             windows=[
                 UsageWindowOut(
                     label="Session (5h)",
@@ -94,6 +182,10 @@ def build_demo_dashboard() -> DashboardUsageResponse:
                     win="5h",
                     percent=74.0,
                     reset_epoch=now + 2 * 3600 + 10 * 60,
+                    burn_rate_per_hour=19.5,
+                    projected_exhaustion_at=codex_s_exhaust,
+                    will_exhaust_before_reset=True,
+                    trend_points=codex_s_trend,
                 ),
                 UsageWindowOut(
                     label="Weekly (7d)",
@@ -101,6 +193,10 @@ def build_demo_dashboard() -> DashboardUsageResponse:
                     win="7d",
                     percent=91.0,
                     reset_epoch=now + 3 * 86400,
+                    burn_rate_per_hour=2.2,
+                    projected_exhaustion_at=codex_w_exhaust,
+                    will_exhaust_before_reset=True,
+                    trend_points=codex_w_trend,
                 ),
             ],
         ),
@@ -112,6 +208,10 @@ def build_demo_dashboard() -> DashboardUsageResponse:
             source="demo",
             plan="Paid",
             account_label="demo@gmail.com",
+            trend_24h=gemini_pro_trend,
+            peak_burn_rate_per_hour=2.4,
+            projected_exhaustion_at=None,
+            will_exhaust_before_reset=False,
             windows=[
                 UsageWindowOut(
                     label="gemini-2.5-pro",
@@ -119,6 +219,10 @@ def build_demo_dashboard() -> DashboardUsageResponse:
                     win="24h",
                     percent=28.0,
                     reset_epoch=now + 11 * 3600,
+                    burn_rate_per_hour=2.4,
+                    projected_exhaustion_at=now + int((72.0 / 2.4) * 3600),
+                    will_exhaust_before_reset=False,
+                    trend_points=gemini_pro_trend,
                 ),
                 UsageWindowOut(
                     label="gemini-2.5-flash",
@@ -126,6 +230,10 @@ def build_demo_dashboard() -> DashboardUsageResponse:
                     win="24h",
                     percent=9.0,
                     reset_epoch=now + 11 * 3600,
+                    burn_rate_per_hour=0.8,
+                    projected_exhaustion_at=now + int((91.0 / 0.8) * 3600),
+                    will_exhaust_before_reset=False,
+                    trend_points=gemini_flash_trend,
                 ),
             ],
         ),
@@ -149,6 +257,7 @@ def build_demo_dashboard() -> DashboardUsageResponse:
         connections=connections,
         fetched_at=now,
         refresh_cooldown_seconds=0,
+        refresh_cooldown_remaining=0,
         is_demo=True,
     )
 
@@ -160,6 +269,7 @@ class UsageService:
         db: Database,
         settings: Settings,
         http_client: httpx.AsyncClient,
+        dns_resolver: DnsResolver | None = None,
     ) -> None:
         self.db = db
         self.settings = settings
@@ -172,6 +282,12 @@ class UsageService:
             "codex": self.codex,
             "gemini": self.gemini,
         }
+        self.alert_manager = AlertManager(
+            db=db,
+            settings=settings,
+            http_client=http_client,
+            dns_resolver=dns_resolver,
+        )
         self.token_manager = TokenManager(
             db=db,
             settings=settings,
@@ -181,6 +297,7 @@ class UsageService:
                 "gemini": self.gemini,
             },
             http_client=http_client,
+            on_terminal_failure=self._safe_notify_reauth,
         )
         self._user_refresh_locks: dict[int, asyncio.Lock] = {}
         self._last_manual_refresh: dict[int, int] = {}
@@ -191,6 +308,25 @@ class UsageService:
             lock = asyncio.Lock()
             self._user_refresh_locks[user_id] = lock
         return lock
+
+    async def _safe_notify_reauth(
+        self,
+        user_id: int,
+        provider: ProviderId,
+        cred: StoredCredential,
+        reason: str,
+    ) -> None:
+        try:
+            await self.alert_manager.notify_reauth_needed(
+                user_id,
+                provider,
+                PROVIDER_NAMES[provider],
+                account_label=cred.account_label,
+                credential_key=credential_fingerprint(cred.encrypted_payload),
+                reason=reason,
+            )
+        except Exception:
+            pass
 
     async def fetch_and_store_provider(
         self, user_id: int, provider: ProviderId
@@ -218,6 +354,8 @@ class UsageService:
                 expected_encrypted_payload=stored.encrypted_payload,
             ):
                 return None
+            if exc.terminal:
+                await self._safe_notify_reauth(user_id, provider, stored, str(exc))
             return err_usage
 
         if cred is None:
@@ -225,6 +363,7 @@ class UsageService:
 
         active_cred = cred
         adapter = self.adapters[provider]
+        reauth_reason: str | None = None
         try:
             usage = await adapter.fetch_usage(cred, self.http_client)
         except UpstreamUnauthorizedError:
@@ -249,6 +388,7 @@ class UsageService:
                 if not matched:
                     return None
                 active_cred = target_cred
+                reauth_reason = str(exc)
                 usage = ProviderUsageOut(
                     id=provider,
                     name=PROVIDER_NAMES[provider],
@@ -272,13 +412,39 @@ class UsageService:
                 account_label=active_cred.account_label,
             )
 
+        now = int(time.time())
+        if usage.ok and usage.windows:
+            self.db.record_usage_history(
+                user_id,
+                usage,
+                now,
+                min_interval_seconds=self.settings.history_min_interval_seconds,
+                retention_days=self.settings.history_retention_days,
+                expected_encrypted_payload=active_cred.encrypted_payload,
+            )
+            user_history = self.db.list_user_history_since(user_id, now - 86400)
+            usage = enrich_provider_with_history(
+                usage,
+                user_history.get(provider, {}),
+                now=now,
+            )
+
         if not self.db.upsert_usage_snapshot(
             user_id,
             usage,
-            int(time.time()),
+            now,
             expected_encrypted_payload=active_cred.encrypted_payload,
         ):
             return None
+
+        if reauth_reason is not None:
+            await self._safe_notify_reauth(user_id, provider, active_cred, reauth_reason)
+        elif usage.ok:
+            try:
+                await self.alert_manager.evaluate_usage_alerts(user_id, usage, now=now)
+            except Exception:
+                pass
+
         return usage
 
     def _build_connection_out(
@@ -322,14 +488,31 @@ class UsageService:
             creds = self.db.list_user_credentials(user_id)
             snapshots, fetched_at = self.db.list_user_snapshots(user_id)
 
-        providers_out = [snapshots[pid] for pid in PROVIDER_ORDER if pid in creds and pid in snapshots]
+        now = int(time.time())
+        history_by_provider = (
+            self.db.list_user_history_since(user_id, now - 86400) if creds else {}
+        )
+
+        providers_out: list[ProviderUsageOut] = []
+        for pid in PROVIDER_ORDER:
+            if pid in creds and pid in snapshots:
+                providers_out.append(
+                    enrich_provider_with_history(
+                        snapshots[pid],
+                        history_by_provider.get(pid, {}),
+                        now=now,
+                    )
+                )
+
         connections_out = [self._build_connection_out(pid, creds.get(pid)) for pid in PROVIDER_ORDER]
+        rem_cooldown = self._remaining_cooldown(user_id)
 
         return DashboardUsageResponse(
             providers=providers_out,
             connections=connections_out,
             fetched_at=fetched_at,
-            refresh_cooldown_seconds=self._remaining_cooldown(user_id),
+            refresh_cooldown_seconds=rem_cooldown,
+            refresh_cooldown_remaining=rem_cooldown,
             is_demo=False,
         )
 
