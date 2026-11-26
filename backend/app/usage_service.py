@@ -199,6 +199,8 @@ class UsageService:
             cred = await self.token_manager.ensure_valid_token(user_id, provider, force=False)
         except TokenRefreshError as exc:
             stored = self.db.get_credential(user_id, provider)
+            if stored is None:
+                return None
             err_usage = ProviderUsageOut(
                 id=provider,
                 name=PROVIDER_NAMES[provider],
@@ -207,32 +209,46 @@ class UsageService:
                 error=str(exc),
                 code=f"expired_{provider}" if exc.terminal else "refresh_failed",
                 source="oauth",
-                account_label=stored.account_label if stored else None,
+                account_label=stored.account_label,
             )
-            self.db.upsert_usage_snapshot(user_id, err_usage, int(time.time()))
+            if not self.db.upsert_usage_snapshot(
+                user_id,
+                err_usage,
+                int(time.time()),
+                expected_encrypted_payload=stored.encrypted_payload,
+            ):
+                return None
             return err_usage
 
         if cred is None:
             return None
 
+        active_cred = cred
         adapter = self.adapters[provider]
         try:
             usage = await adapter.fetch_usage(cred, self.http_client)
         except UpstreamUnauthorizedError:
+            refreshed: StoredCredential | None = None
             try:
                 refreshed = await self.token_manager.ensure_valid_token(
                     user_id, provider, force=True
                 )
                 if refreshed is None:
                     return None
+                active_cred = refreshed
                 usage = await adapter.fetch_usage(refreshed, self.http_client)
             except (TokenRefreshError, UpstreamUnauthorizedError) as exc:
-                self.db.mark_credential_status(
+                target_cred = refreshed if refreshed is not None else cred
+                matched = self.db.mark_credential_status(
                     user_id,
                     provider,
                     refresh_status="expired",
                     refresh_error=str(exc),
+                    expected_encrypted_payload=target_cred.encrypted_payload,
                 )
+                if not matched:
+                    return None
+                active_cred = target_cred
                 usage = ProviderUsageOut(
                     id=provider,
                     name=PROVIDER_NAMES[provider],
@@ -241,7 +257,7 @@ class UsageService:
                     error="憑證已失效且自動續期失敗，請重新連結帳號",
                     code=f"expired_{provider}",
                     source="oauth",
-                    account_label=cred.account_label,
+                    account_label=target_cred.account_label,
                 )
         except Exception as exc:
             usage = ProviderUsageOut(
@@ -253,10 +269,16 @@ class UsageService:
                 code="connect",
                 arg=str(exc),
                 source="oauth",
-                account_label=cred.account_label,
+                account_label=active_cred.account_label,
             )
 
-        self.db.upsert_usage_snapshot(user_id, usage, int(time.time()))
+        if not self.db.upsert_usage_snapshot(
+            user_id,
+            usage,
+            int(time.time()),
+            expected_encrypted_payload=active_cred.encrypted_payload,
+        ):
+            return None
         return usage
 
     def _build_connection_out(

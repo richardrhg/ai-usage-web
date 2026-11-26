@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import {
   api,
   ApiError,
@@ -39,22 +39,33 @@ export function AccountsModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialProvider]);
 
+  const onChangedRef = useRef(onChanged);
+  const unknownTextRef = useRef(t.unknown);
+  onChangedRef.current = onChanged;
+  unknownTextRef.current = t.unknown;
+
+  const activeProvider = activeFlow?.provider ?? null;
+  const activeStateId = activeFlow?.state_id ?? null;
+  const activePollInterval = activeFlow?.poll_interval_seconds ?? 5;
+
   // Automatic background polling ONLY while a Codex Device Code wizard is open
   useEffect(() => {
-    if (!activeFlow || activeFlow.provider !== "codex") return;
-    const intervalMs = Math.max(3, activeFlow.poll_interval_seconds ?? 5) * 1000;
+    if (activeProvider !== "codex" || !activeStateId) return;
+    const intervalMs = Math.max(3, activePollInterval) * 1000;
     let cancelled = false;
+    let inFlight = false;
 
     const timer = window.setInterval(async () => {
-      if (cancelled) return;
+      if (cancelled || inFlight) return;
+      inFlight = true;
       try {
-        const res = await api.pollCodexDeviceOAuth(activeFlow.state_id);
+        const res = await api.pollCodexDeviceOAuth(activeStateId);
         if (cancelled) return;
         if (res.status === "completed") {
           setActiveFlow(null);
-          await onChanged();
+          await onChangedRef.current();
         } else if (res.status === "failed") {
-          setError(res.error || t.unknown);
+          setError(res.error || unknownTextRef.current);
           setActiveFlow(null);
         }
       } catch (err) {
@@ -62,6 +73,8 @@ export function AccountsModal({
           setError(err instanceof ApiError ? err.message : String(err));
           setActiveFlow(null);
         }
+      } finally {
+        inFlight = false;
       }
     }, intervalMs);
 
@@ -69,7 +82,7 @@ export function AccountsModal({
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [activeFlow, onChanged, t.unknown]);
+  }, [activeProvider, activeStateId, activePollInterval]);
 
   async function startFlow(provider: ProviderId) {
     setError(null);

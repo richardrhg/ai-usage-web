@@ -93,6 +93,7 @@ class TokenManager:
                     provider,
                     refresh_status="expired",
                     refresh_error="Missing refresh_token; please reconnect account.",
+                    expected_encrypted_payload=cred.encrypted_payload,
                 )
             return self.db.get_credential(user_id, provider)
 
@@ -117,26 +118,33 @@ class TokenManager:
             try:
                 updated = await refresher.refresh_credential(latest, self.http_client, self.settings)
             except TokenRefreshError as exc:
-                self.db.mark_credential_status(
+                matched = self.db.mark_credential_status(
                     user_id,
                     provider,
                     refresh_status="expired" if exc.terminal else "error",
                     refresh_error=str(exc),
+                    expected_encrypted_payload=latest.encrypted_payload,
                 )
+                if not matched:
+                    return self.db.get_credential(user_id, provider)
                 raise
             except Exception as exc:
-                self.db.mark_credential_status(
+                matched = self.db.mark_credential_status(
                     user_id,
                     provider,
                     refresh_status="error",
                     refresh_error=f"Token refresh failed: {exc}",
+                    expected_encrypted_payload=latest.encrypted_payload,
                 )
+                if not matched:
+                    return self.db.get_credential(user_id, provider)
                 raise TokenRefreshError(f"Token refresh failed: {exc}", terminal=False) from exc
 
             refreshed_at = int(time.time())
-            return self.db.upsert_credential(
+            persisted = self.db.update_refreshed_credential(
                 user_id=user_id,
                 provider=provider,
+                expected_encrypted_payload=latest.encrypted_payload,
                 access_token=updated.access_token,
                 refresh_token=updated.refresh_token or latest.refresh_token,
                 id_token=updated.id_token or latest.id_token,
@@ -148,6 +156,9 @@ class TokenManager:
                 refresh_status="ok",
                 refresh_error=None,
             )
+            if persisted is None:
+                return self.db.get_credential(user_id, provider)
+            return persisted
 
     async def refresh_expiring_on_startup(self) -> int:
         threshold = int(time.time()) + self.settings.proactive_refresh_buffer_seconds

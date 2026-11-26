@@ -181,6 +181,13 @@ export function App() {
     setModalOpen(true);
   }
 
+  const handleModalClose = useCallback(() => {
+    setModalOpen(false);
+    setModalInitialProvider(null);
+  }, []);
+
+  const handleModalChanged = useCallback(() => loadUsage(false), [loadUsage]);
+
   const showDashboard = session.authenticated || demoMode;
   const providers = dashboard?.providers ?? [];
   const anyBad =
@@ -340,11 +347,8 @@ export function App() {
           connections={dashboard.connections}
           nowEpoch={nowEpoch}
           initialProvider={modalInitialProvider}
-          onClose={() => {
-            setModalOpen(false);
-            setModalInitialProvider(null);
-          }}
-          onChanged={() => loadUsage(false)}
+          onClose={handleModalClose}
+          onChanged={handleModalChanged}
         />
       )}
     </>

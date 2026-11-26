@@ -32,6 +32,8 @@ class MockUpstreamRouter:
         self.used_codex_refresh_tokens: set[str] = set()
         self.codex_device_approved = False
         self.gemini_ineligible = False
+        self.claude_refresh_started: asyncio.Event | None = None
+        self.claude_refresh_proceed: asyncio.Event | None = None
 
     async def handle(self, request: httpx.Request) -> httpx.Response:
         url = str(request.url)
@@ -51,6 +53,10 @@ class MockUpstreamRouter:
                     },
                 )
             if body.get("grant_type") == "refresh_token":
+                if self.claude_refresh_started is not None:
+                    self.claude_refresh_started.set()
+                if self.claude_refresh_proceed is not None:
+                    await self.claude_refresh_proceed.wait()
                 self.claude_refresh_calls += 1
                 return httpx.Response(
                     200,
@@ -432,5 +438,92 @@ def test_reactive_401_triggers_auto_refresh_and_retry(tmp_path: Path) -> None:
             assert usage.ok is True
             assert mock.claude_refresh_calls == 1
             assert usage.windows[0].percent == 18.4
+
+    asyncio.run(_run())
+
+
+def test_disconnect_or_reconnect_during_inflight_refresh_never_overwrites(tmp_path: Path) -> None:
+    async def _run() -> None:
+        cfg = _make_settings(tmp_path)
+        mock = MockUpstreamRouter()
+        transport = httpx.MockTransport(mock.handle)
+        app = create_app(cfg, http_transport=transport)
+
+        async with app.router.lifespan_context(app):
+            db: Database = app.state.db
+            svc = app.state.usage_service
+            asgi = httpx.ASGITransport(app=app)
+
+            async with httpx.AsyncClient(transport=asgi, base_url="http://testserver") as client:
+                reg = await client.post(
+                    "/api/auth/register",
+                    json={"username": "race_user", "password": "password123"},
+                )
+                user_id = reg.json()["user"]["id"]
+
+                # Case A: Disconnect while background refresh is awaiting upstream
+                db.upsert_credential(
+                    user_id=user_id,
+                    provider="claude",
+                    access_token="expiring_at_1",
+                    refresh_token="rt_old_1",
+                    account_label="old@claude.ai",
+                    expires_at=int(time.time()) - 10,
+                )
+                mock.claude_refresh_started = asyncio.Event()
+                mock.claude_refresh_proceed = asyncio.Event()
+
+                bg_task = asyncio.create_task(svc.fetch_and_store_provider(user_id, "claude"))
+                await mock.claude_refresh_started.wait()
+
+                del_res = await client.delete("/api/oauth/claude")
+                assert del_res.status_code == 200
+                assert del_res.json()["disconnected"] is True
+
+                mock.claude_refresh_proceed.set()
+                bg_result = await bg_task
+                assert bg_result is None
+                assert db.get_credential(user_id, "claude") is None
+                snapshots, _ = db.list_user_snapshots(user_id)
+                assert "claude" not in snapshots
+
+                # Case B: Reconnect new account while old account refresh is awaiting upstream
+                db.upsert_credential(
+                    user_id=user_id,
+                    provider="claude",
+                    access_token="expiring_at_old_2",
+                    refresh_token="rt_old_2",
+                    account_label="old2@claude.ai",
+                    expires_at=int(time.time()) - 10,
+                )
+                mock.claude_refresh_started = asyncio.Event()
+                mock.claude_refresh_proceed = asyncio.Event()
+
+                refresh_task = asyncio.create_task(
+                    svc.token_manager.ensure_valid_token(user_id, "claude")
+                )
+                await mock.claude_refresh_started.wait()
+
+                # User completes OAuth for a brand-new account while old refresh is mid-flight
+                db.upsert_credential(
+                    user_id=user_id,
+                    provider="claude",
+                    access_token="brand_new_at",
+                    refresh_token="brand_new_rt",
+                    account_label="new_account@claude.ai",
+                    expires_at=int(time.time()) + 7200,
+                )
+
+                mock.claude_refresh_proceed.set()
+                returned = await refresh_task
+                assert returned is not None
+                assert returned.access_token == "brand_new_at"
+                assert returned.refresh_token == "brand_new_rt"
+                assert returned.account_label == "new_account@claude.ai"
+
+                stored = db.get_credential(user_id, "claude")
+                assert stored is not None
+                assert stored.access_token == "brand_new_at"
+                assert stored.refresh_token == "brand_new_rt"
 
     asyncio.run(_run())

@@ -27,6 +27,7 @@ class StoredCredential:
     refresh_status: RefreshStatus
     refresh_error: str | None
     updated_at: int
+    encrypted_payload: str = ""
 
 
 @dataclass
@@ -166,7 +167,8 @@ class Database:
 
     # ── Encrypted Provider Credentials ──────────────────────────────────────
     def _row_to_credential(self, row: sqlite3.Row) -> StoredCredential:
-        secret = self.cipher.decrypt_json(str(row["encrypted_payload"]))
+        raw_encrypted = str(row["encrypted_payload"])
+        secret = self.cipher.decrypt_json(raw_encrypted)
         return StoredCredential(
             user_id=int(row["user_id"]),
             provider=row["provider"],
@@ -183,6 +185,7 @@ class Database:
             refresh_status=row["refresh_status"],
             refresh_error=row["refresh_error"],
             updated_at=int(row["updated_at"]),
+            encrypted_payload=raw_encrypted,
         )
 
     def upsert_credential(
@@ -247,6 +250,67 @@ class Database:
             assert row is not None
             return self._row_to_credential(row)
 
+    def update_refreshed_credential(
+        self,
+        *,
+        user_id: int,
+        provider: ProviderId,
+        expected_encrypted_payload: str,
+        access_token: str,
+        refresh_token: str | None,
+        id_token: str | None = None,
+        account_id: str | None = None,
+        project_id: str | None = None,
+        account_label: str | None = None,
+        expires_at: int | None = None,
+        last_refreshed_at: int | None = None,
+        refresh_status: RefreshStatus = "ok",
+        refresh_error: str | None = None,
+    ) -> StoredCredential | None:
+        now = int(time.time())
+        encrypted = self.cipher.encrypt_json(
+            {
+                "access_token": access_token,
+                "refresh_token": refresh_token,
+                "id_token": id_token,
+                "account_id": account_id,
+                "project_id": project_id,
+            }
+        )
+        with self._conn() as conn:
+            cur = conn.execute(
+                """
+                UPDATE provider_credentials
+                SET encrypted_payload = ?,
+                    account_label = ?,
+                    expires_at = ?,
+                    last_refreshed_at = ?,
+                    refresh_status = ?,
+                    refresh_error = ?,
+                    updated_at = ?
+                WHERE user_id = ? AND provider = ? AND encrypted_payload = ?
+                """,
+                (
+                    encrypted,
+                    account_label,
+                    expires_at,
+                    last_refreshed_at,
+                    refresh_status,
+                    refresh_error,
+                    now,
+                    user_id,
+                    provider,
+                    expected_encrypted_payload,
+                ),
+            )
+            if cur.rowcount == 0:
+                return None
+            row = conn.execute(
+                "SELECT * FROM provider_credentials WHERE user_id = ? AND provider = ?",
+                (user_id, provider),
+            ).fetchone()
+            return self._row_to_credential(row) if row else None
+
     def mark_credential_status(
         self,
         user_id: int,
@@ -254,17 +318,36 @@ class Database:
         *,
         refresh_status: RefreshStatus,
         refresh_error: str | None,
-    ) -> None:
+        expected_encrypted_payload: str | None = None,
+    ) -> bool:
         now = int(time.time())
         with self._conn() as conn:
-            conn.execute(
-                """
-                UPDATE provider_credentials
-                SET refresh_status = ?, refresh_error = ?, updated_at = ?
-                WHERE user_id = ? AND provider = ?
-                """,
-                (refresh_status, refresh_error, now, user_id, provider),
-            )
+            if expected_encrypted_payload is not None:
+                cur = conn.execute(
+                    """
+                    UPDATE provider_credentials
+                    SET refresh_status = ?, refresh_error = ?, updated_at = ?
+                    WHERE user_id = ? AND provider = ? AND encrypted_payload = ?
+                    """,
+                    (
+                        refresh_status,
+                        refresh_error,
+                        now,
+                        user_id,
+                        provider,
+                        expected_encrypted_payload,
+                    ),
+                )
+            else:
+                cur = conn.execute(
+                    """
+                    UPDATE provider_credentials
+                    SET refresh_status = ?, refresh_error = ?, updated_at = ?
+                    WHERE user_id = ? AND provider = ?
+                    """,
+                    (refresh_status, refresh_error, now, user_id, provider),
+                )
+            return cur.rowcount > 0
 
     def get_credential(self, user_id: int, provider: ProviderId) -> StoredCredential | None:
         with self._conn() as conn:
@@ -380,19 +463,51 @@ class Database:
             conn.execute("DELETE FROM oauth_pending_states WHERE state_id = ?", (state_id,))
 
     # ── Cached Usage Snapshots (Single-Query Read per User) ─────────────────
-    def upsert_usage_snapshot(self, user_id: int, usage: ProviderUsageOut, fetched_at: int) -> None:
+    def upsert_usage_snapshot(
+        self,
+        user_id: int,
+        usage: ProviderUsageOut,
+        fetched_at: int,
+        *,
+        expected_encrypted_payload: str | None = None,
+    ) -> bool:
         payload_json = usage.model_dump_json()
         with self._conn() as conn:
-            conn.execute(
-                """
-                INSERT INTO usage_snapshots (user_id, provider, payload_json, fetched_at)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(user_id, provider) DO UPDATE SET
-                    payload_json = excluded.payload_json,
-                    fetched_at = excluded.fetched_at
-                """,
-                (user_id, usage.id, payload_json, fetched_at),
-            )
+            if expected_encrypted_payload is not None:
+                cur = conn.execute(
+                    """
+                    INSERT INTO usage_snapshots (user_id, provider, payload_json, fetched_at)
+                    SELECT ?, ?, ?, ?
+                    WHERE EXISTS (
+                        SELECT 1 FROM provider_credentials
+                        WHERE user_id = ? AND provider = ? AND encrypted_payload = ?
+                    )
+                    ON CONFLICT(user_id, provider) DO UPDATE SET
+                        payload_json = excluded.payload_json,
+                        fetched_at = excluded.fetched_at
+                    """,
+                    (
+                        user_id,
+                        usage.id,
+                        payload_json,
+                        fetched_at,
+                        user_id,
+                        usage.id,
+                        expected_encrypted_payload,
+                    ),
+                )
+            else:
+                cur = conn.execute(
+                    """
+                    INSERT INTO usage_snapshots (user_id, provider, payload_json, fetched_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(user_id, provider) DO UPDATE SET
+                        payload_json = excluded.payload_json,
+                        fetched_at = excluded.fetched_at
+                    """,
+                    (user_id, usage.id, payload_json, fetched_at),
+                )
+            return cur.rowcount > 0
 
     def list_user_snapshots(self, user_id: int) -> tuple[dict[ProviderId, ProviderUsageOut], int | None]:
         with self._conn() as conn:
