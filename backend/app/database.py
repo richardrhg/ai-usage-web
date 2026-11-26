@@ -429,7 +429,8 @@ class Database:
             rows = conn.execute(
                 """
                 SELECT user_id, provider FROM provider_credentials
-                WHERE expires_at IS NULL OR expires_at <= ?
+                WHERE (expires_at IS NULL OR expires_at <= ?)
+                  AND refresh_status != 'expired'
                 """,
                 (threshold_epoch,),
             ).fetchall()
@@ -808,7 +809,7 @@ class Database:
         prune_before = created_at - 90 * 86400
         with self._conn() as conn:
             conn.execute("DELETE FROM alert_events WHERE created_at < ?", (prune_before,))
-            if resets_at > 0:
+            if resets_at > 0 and alert_level != "needs_reauth":
                 near_dup = conn.execute(
                     """
                     SELECT id FROM alert_events

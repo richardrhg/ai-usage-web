@@ -236,12 +236,14 @@ def test_refresh_query_cooldown_webhook_deduplication_and_reauth_alerts(tmp_path
                         "expires_in": 7200,
                     },
                 )
-            if url in (
-                "https://discord.com/api/webhooks/111/disc_secret",
-                "https://hooks.slack.com/services/T1/B1/slack_secret",
-                "https://api.telegram.org/bot999:tg_secret/sendMessage",
+            if (
+                url.startswith("https://162.159.135.232/")
+                and request.headers.get("Host") in ("discord.com", "hooks.slack.com", "api.telegram.org")
             ):
-                delivered_Hooks.append((url, json.loads(request.content.decode())))
+                host_hdr = request.headers["Host"]
+                assert request.extensions.get("sni_hostname") == host_hdr
+                logical_url = f"https://{host_hdr}{request.url.path}"
+                delivered_Hooks.append((logical_url, json.loads(request.content.decode())))
                 return httpx.Response(200, json={"ok": True})
 
             return httpx.Response(404, text=f"Unhandled URL: {url}")
@@ -399,5 +401,112 @@ def test_refresh_query_cooldown_webhook_deduplication_and_reauth_alerts(tmp_path
                 assert "needs_reauth" in levels
                 assert "critical" in levels
                 assert "warn" in levels
+
+    asyncio.run(_run())
+
+
+def test_dns_rebinding_pinning_and_stable_reauth_deduplication(tmp_path: Path) -> None:
+    async def _run() -> None:
+        dns_calls = 0
+
+        def flipping_dns_resolver(host: str, port: int) -> Sequence[str]:
+            nonlocal dns_calls
+            dns_calls += 1
+            # First lookup (at dispatch) returns public IP; any second lookup would rebind to loopback
+            return ["162.159.135.232"] if dns_calls == 1 else ["127.0.0.1"]
+
+        captured_requests: list[httpx.Request] = []
+
+        async def mock_handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if url == "https://console.anthropic.com/v1/oauth/token":
+                return httpx.Response(401, json={"error": "invalid_grant"})
+            if request.url.host == "162.159.135.232":
+                captured_requests.append(request)
+                return httpx.Response(200, json={"ok": True})
+            return httpx.Response(500, text=f"Unexpected host: {url}")
+
+        cfg = Settings(
+            db_path=tmp_path / "pin_reauth.db",
+            secret_key="pin-reauth-secret-key",
+            enable_background_poller=False,
+        )
+        app = create_app(
+            cfg,
+            http_transport=httpx.MockTransport(mock_handler),
+            dns_resolver=_public_dns_resolver,
+        )
+
+        async with app.router.lifespan_context(app):
+            db: Database = app.state.db
+            svc = app.state.usage_service
+            user = db.create_user("reauth_tester", "hash")
+            uid = user["id"]
+
+            from app.schemas import AlertSettingsPayload
+
+            db.upsert_alert_settings(
+                uid,
+                AlertSettingsPayload(
+                    enabled=True,
+                    discord_webhook_url="https://hooks-gateway.example.com/webhook/abc",
+                ),
+            )
+
+            # 1. Verify outgoing request pins literal IP + Host header + TLS sni_hostname in 1 lookup
+            svc.alert_manager.dns_resolver = flipping_dns_resolver
+            sent, errors = await svc.alert_manager.dispatch_message(
+                db.get_alert_settings(uid),
+                "pinning check",
+            )
+            assert sent == ["discord"]
+            assert errors == {}
+            assert dns_calls == 1
+            assert len(captured_requests) == 1
+            assert captured_requests[0].url.host == "162.159.135.232"
+            assert captured_requests[0].headers["Host"] == "hooks-gateway.example.com"
+            assert captured_requests[0].extensions.get("sni_hostname") == "hooks-gateway.example.com"
+
+            # 2. Verify needs_reauth deduplicates permanently even when last_refreshed_at is None
+            #    and updated_at changes by > 120 seconds across retries
+            svc.alert_manager.dns_resolver = _public_dns_resolver
+            captured_requests.clear()
+
+            db.upsert_credential(
+                user_id=uid,
+                provider="claude",
+                access_token="expired_at_v1",
+                refresh_token="invalid_rt_v1",
+                account_label="reauth@claude.ai",
+                expires_at=int(time.time()) - 600,
+                last_refreshed_at=None,
+            )
+
+            await svc.fetch_and_store_provider(uid, "claude")
+            assert len(captured_requests) == 1
+
+            # Simulate updated_at advancing by +3600s (> 120s) without replacing encrypted_payload
+            with sqlite3.connect(str(cfg.db_path)) as raw:
+                raw.execute(
+                    "UPDATE provider_credentials SET updated_at = updated_at + 3600, refresh_status = 'error' WHERE user_id = ?",
+                    (uid,),
+                )
+                raw.commit()
+
+            await svc.fetch_and_store_provider(uid, "claude")
+            assert len(captured_requests) == 1  # Still 1 — stable credential_fingerprint deduplicated!
+
+            # Replacing credential with a brand-new OAuth connection resets fingerprint cleanly
+            db.upsert_credential(
+                user_id=uid,
+                provider="claude",
+                access_token="expired_at_v2",
+                refresh_token="invalid_rt_v2",
+                account_label="reauth@claude.ai",
+                expires_at=int(time.time()) - 600,
+                last_refreshed_at=None,
+            )
+            await svc.fetch_and_store_provider(uid, "claude")
+            assert len(captured_requests) == 2
 
     asyncio.run(_run())

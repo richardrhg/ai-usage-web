@@ -6,7 +6,7 @@ from typing import Any
 
 import httpx
 
-from .alerts import AlertManager, DnsResolver
+from .alerts import AlertManager, DnsResolver, credential_fingerprint
 from .analytics import enrich_provider_with_history
 from .config import Settings
 from .database import Database, StoredCredential
@@ -322,7 +322,7 @@ class UsageService:
                 provider,
                 PROVIDER_NAMES[provider],
                 account_label=cred.account_label,
-                credential_epoch=cred.last_refreshed_at or cred.updated_at,
+                credential_key=credential_fingerprint(cred.encrypted_payload),
                 reason=reason,
             )
         except Exception:

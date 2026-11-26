@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import ipaddress
 import socket
 import time
+from dataclasses import dataclass
 from typing import Callable, Sequence
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlparse, urlunparse
 
 import httpx
 
@@ -37,27 +39,52 @@ class WebhookValidationError(ValueError):
     """Raised when a user-supplied webhook URL violates HTTPS or SSRF rules."""
 
 
-def _is_disallowed_ip_address(raw_ip: str) -> bool:
+@dataclass(frozen=True)
+class ValidatedWebhookTarget:
+    original_url: str
+    hostname: str
+    port: int
+    pinned_ips: tuple[str, ...]
+
+
+def credential_fingerprint(encrypted_payload: str) -> int:
+    """
+    Stable 53-bit positive integer fingerprint of an encrypted credential row.
+    Remains unchanged across status/error timestamp updates and changes immediately
+    when a credential is newly linked or rotated.
+    """
+    if not encrypted_payload:
+        return 0
+    digest = hashlib.sha256(encrypted_payload.encode("utf-8")).digest()[:8]
+    val = int.from_bytes(digest, "big") & 0x1F_FFFF_FFFF_FFFF
+    return val or 1
+
+
+def _canonical_validated_ip(raw_ip: str) -> tuple[str, bool]:
     cleaned = raw_ip.strip().split("%", 1)[0]
     addr = ipaddress.ip_address(cleaned)
+    check_addr = addr
     if isinstance(addr, ipaddress.IPv6Address):
         if addr.ipv4_mapped is not None:
-            addr = addr.ipv4_mapped
+            check_addr = addr.ipv4_mapped
         elif addr.sixtofour is not None:
-            addr = addr.sixtofour
+            check_addr = addr.sixtofour
         elif addr.teredo is not None:
             server_ip, client_ip = addr.teredo
-            if _is_disallowed_ip_address(str(server_ip)) or _is_disallowed_ip_address(str(client_ip)):
-                return True
-    return bool(
-        not addr.is_global
-        or addr.is_private
-        or addr.is_loopback
-        or addr.is_link_local
-        or addr.is_multicast
-        or addr.is_reserved
-        or addr.is_unspecified
+            _, bad_s = _canonical_validated_ip(str(server_ip))
+            _, bad_c = _canonical_validated_ip(str(client_ip))
+            if bad_s or bad_c:
+                return str(addr), True
+    disallowed = bool(
+        not check_addr.is_global
+        or check_addr.is_private
+        or check_addr.is_loopback
+        or check_addr.is_link_local
+        or check_addr.is_multicast
+        or check_addr.is_reserved
+        or check_addr.is_unspecified
     )
+    return str(addr), disallowed
 
 
 def _default_dns_resolver(hostname: str, port: int) -> list[str]:
@@ -66,20 +93,22 @@ def _default_dns_resolver(hostname: str, port: int) -> list[str]:
     for info in infos:
         sockaddr = info[4]
         if sockaddr and isinstance(sockaddr[0], str):
-            ips.append(sockaddr[0])
+            ip_val = sockaddr[0]
+            if ip_val not in ips:
+                ips.append(ip_val)
     return ips
 
 
-def validate_webhook_url(
+def resolve_webhook_target(
     url: str,
     *,
     allow_private_targets: bool = False,
     dns_resolver: DnsResolver | None = None,
     resolve_dns: bool = True,
-) -> str:
+) -> ValidatedWebhookTarget | None:
     cleaned = url.strip()
     if not cleaned:
-        return ""
+        return None
 
     parsed = urlparse(cleaned)
     if parsed.scheme.lower() != "https":
@@ -90,9 +119,32 @@ def validate_webhook_url(
     host = (parsed.hostname or "").strip().rstrip(".").lower()
     if not host:
         raise WebhookValidationError("Webhook 網址缺少有效的主機名稱")
+    port = parsed.port or 443
 
     if allow_private_targets:
-        return cleaned
+        try:
+            canonical_ip, _ = _canonical_validated_ip(host)
+            return ValidatedWebhookTarget(
+                original_url=cleaned,
+                hostname=host,
+                port=port,
+                pinned_ips=(canonical_ip,),
+            )
+        except ValueError:
+            if resolve_dns and dns_resolver is not None:
+                resolved = tuple(dict.fromkeys(dns_resolver(host, port)))
+                return ValidatedWebhookTarget(
+                    original_url=cleaned,
+                    hostname=host,
+                    port=port,
+                    pinned_ips=resolved,
+                )
+            return ValidatedWebhookTarget(
+                original_url=cleaned,
+                hostname=host,
+                port=port,
+                pinned_ips=(),
+            )
 
     if (
         host in FORBIDDEN_HOSTNAMES
@@ -103,48 +155,97 @@ def validate_webhook_url(
         raise WebhookValidationError(f"禁止使用本機或內部主機名稱 ({host})")
 
     # Check direct IPv4 / IPv6 literals (including packed integer IPv4 notations)
-    literal_checked = False
     try:
-        ip_dead = _is_disallowed_ip_address(host)
-        literal_checked = True
+        canonical_ip, ip_dead = _canonical_validated_ip(host)
         if ip_dead:
             raise WebhookValidationError(f"禁止指向私有、迴路或鏈路本機 IP ({host})")
+        return ValidatedWebhookTarget(
+            original_url=cleaned,
+            hostname=canonical_ip,
+            port=port,
+            pinned_ips=(canonical_ip,),
+        )
     except WebhookValidationError:
         raise
     except ValueError:
-        # Check packed/octal/hex IPv4 literals accepted by inet_aton (e.g. 2130706433, 0x7f000001)
         if all(part.isdigit() or part.startswith("0x") for part in host.split(".")):
             try:
                 packed = socket.inet_aton(host)
                 canonical = socket.inet_ntoa(packed)
-                literal_checked = True
-                if _is_disallowed_ip_address(canonical):
+                canonical_ip, ip_dead = _canonical_validated_ip(canonical)
+                if ip_dead:
                     raise WebhookValidationError(f"禁止指向私有或本機 IP ({canonical})")
+                return ValidatedWebhookTarget(
+                    original_url=cleaned,
+                    hostname=canonical_ip,
+                    port=port,
+                    pinned_ips=(canonical_ip,),
+                )
             except WebhookValidationError:
                 raise
             except OSError:
                 pass
 
-    if not literal_checked and resolve_dns:
-        resolver = dns_resolver or _default_dns_resolver
-        port = parsed.port or 443
-        try:
-            resolved_ips = list(resolver(host, port))
-        except OSError as exc:
-            raise WebhookValidationError(f"無法解析 Webhook 網域名稱 ({host}): {exc}") from exc
-        if not resolved_ips:
-            raise WebhookValidationError(f"Webhook 網域名稱未傳回任何 IP ({host})")
-        for ip_text in resolved_ips:
-            try:
-                disallowed = _is_disallowed_ip_address(ip_text)
-            except ValueError as exc:
-                raise WebhookValidationError(f"無效的解析 IP ({ip_text})") from exc
-            if disallowed:
-                raise WebhookValidationError(
-                    f"禁止 Webhook 網域解析至私有、本機或 Metadata IP ({ip_text})"
-                )
+    if not resolve_dns:
+        return ValidatedWebhookTarget(
+            original_url=cleaned,
+            hostname=host,
+            port=port,
+            pinned_ips=(),
+        )
 
-    return cleaned
+    resolver = dns_resolver or _default_dns_resolver
+    try:
+        resolved_ips = list(resolver(host, port))
+    except OSError as exc:
+        raise WebhookValidationError(f"無法解析 Webhook 網域名稱 ({host}): {exc}") from exc
+    if not resolved_ips:
+        raise WebhookValidationError(f"Webhook 網域名稱未傳回任何 IP ({host})")
+
+    pinned: list[str] = []
+    for ip_text in resolved_ips:
+        try:
+            canonical_ip, disallowed = _canonical_validated_ip(ip_text)
+        except ValueError as exc:
+            raise WebhookValidationError(f"無效的解析 IP ({ip_text})") from exc
+        if disallowed:
+            raise WebhookValidationError(
+                f"禁止 Webhook 網域解析至私有、本機或 Metadata IP ({ip_text})"
+            )
+        if canonical_ip not in pinned:
+            pinned.append(canonical_ip)
+
+    return ValidatedWebhookTarget(
+        original_url=cleaned,
+        hostname=host,
+        port=port,
+        pinned_ips=tuple(pinned),
+    )
+
+
+def validate_webhook_url(
+    url: str,
+    *,
+    allow_private_targets: bool = False,
+    dns_resolver: DnsResolver | None = None,
+    resolve_dns: bool = True,
+) -> str:
+    target = resolve_webhook_target(
+        url,
+        allow_private_targets=allow_private_targets,
+        dns_resolver=dns_resolver,
+        resolve_dns=resolve_dns,
+    )
+    return target.original_url if target is not None else ""
+
+
+def _build_pinned_url(original_url: str, pinned_ip: str, port: int) -> str:
+    parsed = urlparse(original_url)
+    ip_literal = f"[{pinned_ip}]" if ":" in pinned_ip else pinned_ip
+    netloc = ip_literal if port == 443 else f"{ip_literal}:{port}"
+    return urlunparse(
+        ("https", netloc, parsed.path or "/", parsed.params, parsed.query, "")
+    )
 
 
 def validate_alert_settings_urls(
@@ -213,14 +314,60 @@ class AlertManager:
             or cfg.telegram_webhook_url.strip()
         )
 
-    async def _validate_target_async(self, url: str) -> str:
-        return await asyncio.to_thread(
-            validate_webhook_url,
+    async def _resolve_target_async(self, url: str) -> ValidatedWebhookTarget:
+        target = await asyncio.to_thread(
+            resolve_webhook_target,
             url,
             allow_private_targets=self.settings.allow_private_webhook_targets,
             dns_resolver=self.dns_resolver,
             resolve_dns=True,
         )
+        if target is None:
+            raise WebhookValidationError("Webhook 網址不可為空白")
+        return target
+
+    async def _send_pinned_post(
+        self,
+        target: ValidatedWebhookTarget,
+        body: dict[str, str],
+    ) -> httpx.Response:
+        # When allow_private_webhook_targets=True in unit tests without DNS pinning
+        if not target.pinned_ips:
+            return await self.http_client.post(
+                target.original_url,
+                json=body,
+                headers={"Content-Type": "application/json", "User-Agent": "ai-usage-web/2.0"},
+                follow_redirects=False,
+            )
+
+        ascii_host = target.hostname.encode("idna").decode("ascii")
+        host_header = ascii_host if target.port == 443 else f"{ascii_host}:{target.port}"
+        last_exc: Exception | None = None
+
+        # Connect directly to the validated IP(s) so HTTPX/OS never re-resolves DNS (no TOCTOU
+        # DNS-rebinding bypass), while preserving Host + TLS SNI for certificate verification.
+        for idx, pinned_ip in enumerate(target.pinned_ips):
+            pinned_url = _build_pinned_url(target.original_url, pinned_ip, target.port)
+            req = self.http_client.build_request(
+                "POST",
+                pinned_url,
+                json=body,
+                headers={
+                    "Host": host_header,
+                    "Content-Type": "application/json",
+                    "User-Agent": "ai-usage-web/2.0",
+                },
+                extensions={"sni_hostname": ascii_host},
+            )
+            try:
+                return await self.http_client.send(req, follow_redirects=False)
+            except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                last_exc = exc
+                if idx + 1 >= len(target.pinned_ips):
+                    raise
+
+        assert last_exc is not None
+        raise last_exc
 
     async def _post_channel(
         self,
@@ -230,25 +377,20 @@ class AlertManager:
         *,
         telegram_chat_id: str = "",
     ) -> None:
-        safe_url = await self._validate_target_async(url)
+        target = await self._resolve_target_async(url)
         if channel == "discord":
             body = {"content": message}
         elif channel == "slack":
             body = {"text": message}
         else:
-            parsed = urlparse(safe_url)
+            parsed = urlparse(target.original_url)
             qs_chat = (parse_qs(parsed.query).get("chat_id") or [""])[0].strip()
             effective_chat_id = telegram_chat_id.strip() or qs_chat
             body = {"text": message}
             if effective_chat_id:
                 body["chat_id"] = effective_chat_id
 
-        resp = await self.http_client.post(
-            safe_url,
-            json=body,
-            headers={"Content-Type": "application/json", "User-Agent": "ai-usage-web/2.0"},
-            follow_redirects=False,
-        )
+        resp = await self._send_pinned_post(target, body)
         if 300 <= resp.status_code < 400:
             raise WebhookValidationError(f"禁止 Webhook 重新導向 (HTTP {resp.status_code})")
         if resp.status_code >= 400:
@@ -457,7 +599,7 @@ class AlertManager:
         provider_name: str,
         *,
         account_label: str | None = None,
-        credential_epoch: int = 0,
+        credential_key: int = 0,
         reason: str = "",
         now: int | None = None,
     ) -> bool:
@@ -478,7 +620,7 @@ class AlertManager:
             provider=provider,
             window_key="oauth_token",
             alert_level="needs_reauth",
-            resets_at=int(credential_epoch or 0),
+            resets_at=int(credential_key or 0),
             message=msg,
             now=ts,
         )
