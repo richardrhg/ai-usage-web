@@ -1,0 +1,19 @@
+services:
+  ai-usage-web:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - APP_SECRET_KEY=${APP_SECRET_KEY:-}
+      - COOKIE_SECURE=${COOKIE_SECURE:-0}
+      - ALLOW_REGISTRATION=${ALLOW_REGISTRATION:-1}
+      - POLL_INTERVAL_SECONDS=${POLL_INTERVAL_SECONDS:-120}
+      - REFRESH_COOLDOWN_SECONDS=${REFRESH_COOLDOWN_SECONDS:-30}
+      - GEMINI_OAUTH_CLIENT_ID=${GEMINI_OAUTH_CLIENT_ID:-}
+      - GEMINI_OAUTH_CLIENT_SECRET=${GEMINI_OAUTH_CLIENT_SECRET:-}
+    volumes:
+      - ai_usage_data:/data
+    restart: unless-stopped
+
+volumes:
+  ai_usage_data:

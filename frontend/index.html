@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>AI Usage Monitor</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet" />
+  <script>
+    (function () {
+      var d = document.documentElement, t = null, l = null;
+      try { t = localStorage.getItem("ai-usage-theme"); } catch (e) {}
+      try { l = localStorage.getItem("ai-usage-lang"); } catch (e) {}
+      if (!l) l = /^zh\b/i.test(navigator.language || "") ? "zh" : "en";
+      d.setAttribute("data-theme", t || "midnight");
+      d.setAttribute("data-lang", l);
+      d.setAttribute("lang", l === "zh" ? "zh-Hant" : "en");
+    })();
+  </script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="/src/main.tsx"></script>
+</body>
+</html>
