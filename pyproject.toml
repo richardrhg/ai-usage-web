@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-usage-web"
+version = "0.1.0"
+description = "本機版 Claude + Codex 用量儀表板（零第三方執行期依賴）"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = []
+keywords = ["claude", "codex", "openai", "anthropic", "usage", "dashboard", "cli"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Environment :: Web Environment",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+
+[project.urls]
+Homepage = "https://github.com/richardrhg/ai-usage-web"
+Repository = "https://github.com/richardrhg/ai-usage-web"
+Documentation = "https://github.com/richardrhg/ai-usage-web/blob/main/docs/cli-guide.md"
+
+[project.scripts]
+ai-usage-web = "claude_usage_web:main"
+
+[tool.setuptools]
+py-modules = ["claude_usage_web"]

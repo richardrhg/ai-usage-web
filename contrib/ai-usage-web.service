@@ -1,0 +1,20 @@
+# 參考範本：Linux systemd --user 背景常駐服務
+# 建議直接執行 `ai-usage-web --print-systemd > ~/.config/systemd/user/ai-usage-web.service`
+# 自動填入目前環境的執行檔絕對路徑與自訂參數。
+
+[Unit]
+Description=AI Usage Web — Local Claude & Codex Usage Dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/ai-usage-web --host 127.0.0.1 --port 8787 --interval 120
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+# 若使用長期 Token（如 CLAUDE_CODE_OAUTH_TOKEN），可寫入 ~/.config/ai-usage-web/env（權限 chmod 600）
+EnvironmentFile=-%h/.config/ai-usage-web/env
+
+[Install]
+WantedBy=default.target

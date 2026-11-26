@@ -28,13 +28,18 @@ AI Usage Web — 本機版「Claude + Codex 用量儀表板」
 import argparse
 import base64
 import json
+import math
 import os
+import plistlib
 import re
+import shlex
+import shutil
 import subprocess
 import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -75,6 +80,12 @@ UTIL_RE = re.compile(r"^anthropic-ratelimit-unified-(.+)-utilization$", re.I)
 # 網頁配色。要加新主題:PAGE 的 CSS 補一段 [data-theme="xxx"]、
 # PAGE 的 JS THEMES 陣列補一行,然後把 id 加進這裡。
 THEME_IDS = ["midnight", "phosphor", "amber", "synthwave", "ice", "paper"]
+
+# 手動 ?refresh=1 的預設冷卻秒數與最長等待秒數。
+REFRESH_COOLDOWN_SEC = 30
+REFRESH_TIMEOUT_SEC = 10.0
+SYSTEMD_UNIT_NAME = "ai-usage-web.service"
+LAUNCHD_LABEL = "com.ai-usage-web"
  
  
 # ═════════════════════════════════════════════ 共用工具
@@ -126,15 +137,43 @@ def decode_jwt_claims(token):
         return json.loads(base64.urlsafe_b64decode(payload))
     except Exception:
         return {}
- 
- 
+
+
+def normalize_source(raw):
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    return text or None
+
+
+def normalize_plan(raw):
+    if raw is None:
+        return None
+    text = str(raw).strip().lower()
+    return text or None
+
+
+def provider_ok(pid, name, windows, *, source=None, plan=None):
+    return {
+        "id": pid,
+        "name": name,
+        "ok": True,
+        "error": None,
+        "code": None,
+        "arg": None,
+        "source": normalize_source(source),
+        "plan": normalize_plan(plan),
+        "windows": windows,
+    }
+
+
 # ═════════════════════════════════════════════ Claude
  
 def claude_token():
     """回傳 (token, 來源說明)。每次輪詢都重讀,Claude Code 換發後會自動跟上。"""
     env = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
-    if env:
-        return env.strip(), "環境變數"
+    if env and env.strip():
+        return env.strip(), "CLAUDE_CODE_OAUTH_TOKEN"
  
     if CLAUDE_CREDENTIALS.exists():
         try:
@@ -166,7 +205,7 @@ def fetch_claude(token_override=None):
     if not token:
         return provider_error("claude", "Claude",
                               "找不到憑證。裝好 Claude Code 後跑一次 `claude` 登入",
-                              "no_cred_claude")
+                              "no_cred_claude", source=source)
  
     body = json.dumps({
         "model": ANTHROPIC_PROBE_MODEL,
@@ -186,9 +225,11 @@ def fetch_claude(token_override=None):
             },
         )
     except Exception as exc:
-        return provider_error("claude", "Claude", f"連線失敗: {exc}", "connect", str(exc))
+        return provider_error("claude", "Claude", f"連線失敗: {exc}", "connect", str(exc),
+                              source=source)
  
     lower = {k.lower(): v for k, v in headers.items()}
+    plan = lower.get("anthropic-ratelimit-unified-tier")
     windows = {}
     for key, value in lower.items():
         m = UTIL_RE.match(key)
@@ -210,14 +251,15 @@ def fetch_claude(token_override=None):
     if not windows:
         if status == 401:
             return provider_error("claude", "Claude",
-                                  "憑證無效或已過期,重跑一次 `claude` 登入", "expired_claude")
+                                  "憑證無效或已過期,重跑一次 `claude` 登入", "expired_claude",
+                                  source=source, plan=plan)
         return provider_error("claude", "Claude",
-                              f"回應沒有用量 header (HTTP {status})", "no_headers", status)
+                              f"回應沒有用量 header (HTTP {status})", "no_headers", status,
+                              source=source, plan=plan)
  
     ordered = [windows.pop(k) for k in CLAUDE_WINDOW_ORDER if k in windows]
     ordered += [windows[k] for k in sorted(windows)]
-    return {"id": "claude", "name": "Claude", "ok": True, "error": None,
-            "source": source, "windows": ordered}
+    return provider_ok("claude", "Claude", ordered, source=source, plan=plan)
  
  
 # ═════════════════════════════════════════════ Codex
@@ -225,10 +267,10 @@ def fetch_claude(token_override=None):
 def codex_auth():
     """回傳 (access_token, account_id, 來源說明)。"""
     env = os.environ.get("CODEX_ACCESS_TOKEN")
-    if env:
+    if env and env.strip():
         token = env.strip()
         claims = decode_jwt_claims(token).get(OPENAI_AUTH_CLAIM) or {}
-        return token, claims.get("chatgpt_account_id"), "環境變數"
+        return token, claims.get("chatgpt_account_id"), "CODEX_ACCESS_TOKEN"
  
     if CODEX_AUTH_FILE.exists():
         try:
@@ -296,7 +338,7 @@ def fetch_codex(token_override=None):
     if not token:
         return provider_error("codex", "Codex",
                               "找不到憑證。裝好 Codex CLI 後跑一次 `codex` 登入",
-                              "no_cred_codex")
+                              "no_cred_codex", source=source)
  
     headers = {"authorization": f"Bearer {token}", "accept": "application/json",
                "user-agent": "ai-usage-web/1.0"}
@@ -306,19 +348,23 @@ def fetch_codex(token_override=None):
     try:
         status, _, raw = http_json(CODEX_ENDPOINT, headers=headers)
     except Exception as exc:
-        return provider_error("codex", "Codex", f"連線失敗: {exc}", "connect", str(exc))
+        return provider_error("codex", "Codex", f"連線失敗: {exc}", "connect", str(exc),
+                              source=source)
  
     if status == 401:
         return provider_error("codex", "Codex",
-                              "憑證已過期,開一次 Codex CLI 讓它更新", "expired_codex")
+                              "憑證已過期,開一次 Codex CLI 讓它更新", "expired_codex",
+                              source=source)
     if status >= 400:
-        return provider_error("codex", "Codex", f"端點回應 HTTP {status}", "http", status)
+        return provider_error("codex", "Codex", f"端點回應 HTTP {status}", "http", status,
+                              source=source)
  
     try:
         data = json.loads(raw)
     except Exception:
-        return provider_error("codex", "Codex", "回應不是合法 JSON", "bad_json")
+        return provider_error("codex", "Codex", "回應不是合法 JSON", "bad_json", source=source)
  
+    plan = (data.get("credits") or {}).get("plan") or data.get("plan_type")
     rl = data.get("rate_limit") or {}
     windows = [w for w in (_codex_window(rl.get("primary_window"), "Session", derive=True),
                            _codex_window(rl.get("secondary_window"), "Weekly", derive=True)) if w]
@@ -331,65 +377,164 @@ def fetch_codex(token_override=None):
             windows.append(w)
  
     if not windows:
-        return provider_error("codex", "Codex", "回應裡沒有用量資料", "no_usage")
+        return provider_error("codex", "Codex", "回應裡沒有用量資料", "no_usage",
+                              source=source, plan=plan)
  
-    plan = ((data.get("credits") or {}).get("plan") or data.get("plan_type") or "")
-    return {"id": "codex", "name": "Codex", "ok": True, "error": None,
-            "source": source, "plan": plan, "windows": windows}
+    return provider_ok("codex", "Codex", windows, source=source, plan=plan)
  
  
 # ═════════════════════════════════════════════ 輪詢
  
-def provider_error(pid, name, message, code=None, arg=None):
+def provider_error(pid, name, message, code=None, arg=None, *, source=None, plan=None):
     """message 是中文原句,網頁沒有對應翻譯時就直接顯示它。
 
     code / arg 是給前端 i18n 用的:code 對到 I18N 的 err 字典,arg 是要塞進去的
-    變數(例外訊息、HTTP 狀態碼)。多送這兩個欄位不影響任何舊的取用方式。
+    變數(例外訊息、HTTP 狀態碼)。source 與 plan 一律正規化為一致的欄位結構。
     """
-    return {"id": pid, "name": name, "ok": False, "error": message,
-            "code": code, "arg": arg, "windows": []}
+    return {
+        "id": pid,
+        "name": name,
+        "ok": False,
+        "error": message,
+        "code": code,
+        "arg": arg,
+        "source": normalize_source(source),
+        "plan": normalize_plan(plan),
+        "windows": [],
+    }
  
  
 def demo_providers():
     now = int(time.time())
     return [
-        {"id": "claude", "name": "Claude", "ok": True, "error": None, "source": "demo", "windows": [
+        provider_ok("claude", "Claude", [
             {"label": "Session (5h)", "kind": "session", "win": "5h",
              "percent": 12.0, "reset_epoch": now + 4 * 3600 + 30 * 60},
             {"label": "Weekly (7d)", "kind": "weekly", "win": "7d",
              "percent": 23.0, "reset_epoch": now + 5 * 86400},
             {"label": "Fable (7d)", "kind": "fable", "win": "7d",
              "percent": 32.0, "reset_epoch": now + 5 * 86400},
-        ]},
-        {"id": "codex", "name": "Codex", "ok": True, "error": None, "source": "demo", "windows": [
+        ], source="demo", plan=None),
+        provider_ok("codex", "Codex", [
             {"label": "Session (5h)", "kind": "session", "win": "5h",
              "percent": 74.0, "reset_epoch": now + 2 * 3600 + 10 * 60},
             {"label": "Weekly (7d)", "kind": "weekly", "win": "7d",
              "percent": 91.0, "reset_epoch": now + 3 * 86400},
-        ]},
+        ], source="demo", plan=None),
     ]
  
  
 class Poller:
-    def __init__(self, args):
+    def __init__(self, args, *, cooldown_sec=None, refresh_timeout=REFRESH_TIMEOUT_SEC,
+                 clock=time.monotonic):
         self.args = args
+        if cooldown_sec is None:
+            cooldown_sec = getattr(args, "refresh_cooldown", REFRESH_COOLDOWN_SEC)
+        self.cooldown_sec = max(0.0, float(cooldown_sec))
+        self.refresh_timeout = max(0.0, float(refresh_timeout))
+        self._clock = clock
         self.lock = threading.Lock()
+        self._cond = threading.Condition(self.lock)
         self.state = {"providers": [], "fetched_at": None}
-        self._wake = threading.Event()
- 
+        self._gen = 0
+        self._polling = False
+        self._wake_requested = False
+        self._pending_refresh_gen = None
+        self._cooldown_until = None
+        self._stopped = False
+
+    def _cooldown_remaining_unlocked(self):
+        if self._cooldown_until is None:
+            return 0
+        rem = self._cooldown_until - self._clock()
+        return math.ceil(rem) if rem > 0 else 0
+
+    def cooldown_remaining(self):
+        with self._cond:
+            return self._cooldown_remaining_unlocked()
+
+    @property
+    def generation(self):
+        with self._cond:
+            return self._gen
+
     def snapshot(self):
-        with self.lock:
-            return dict(self.state)
- 
+        with self._cond:
+            snap = dict(self.state)
+            snap["refresh_cooldown_remaining"] = self._cooldown_remaining_unlocked()
+            return snap
+
     def refresh_now(self):
-        self._wake.set()
- 
+        with self._cond:
+            self._wake_requested = True
+            self._cond.notify_all()
+
+    def refresh(self, timeout=None):
+        """觸發新一輪輪詢並透過 Condition 等待完成;冷卻時間內直接複用快取快照。"""
+        limit = self.refresh_timeout if timeout is None else max(0.0, float(timeout))
+        with self._cond:
+            if self._pending_refresh_gen is not None and self._gen < self._pending_refresh_gen:
+                target_gen = self._pending_refresh_gen
+            elif self._cooldown_remaining_unlocked() > 0:
+                snap = dict(self.state)
+                snap["refresh_cooldown_remaining"] = self._cooldown_remaining_unlocked()
+                return snap
+            else:
+                target_gen = self._gen + (2 if self._polling else 1)
+                self._pending_refresh_gen = target_gen
+                if self.cooldown_sec > 0:
+                    self._cooldown_until = self._clock() + self.cooldown_sec
+                self._wake_requested = True
+                self._cond.notify_all()
+
+            deadline = self._clock() + limit
+            while not self._stopped and self._gen < target_gen:
+                remaining = deadline - self._clock()
+                if remaining <= 0:
+                    break
+                self._cond.wait(timeout=remaining)
+
+            snap = dict(self.state)
+            snap["refresh_cooldown_remaining"] = self._cooldown_remaining_unlocked()
+            return snap
+
+    def wait_for_generation(self, target_gen, timeout=None):
+        limit = self.refresh_timeout if timeout is None else max(0.0, float(timeout))
+        with self._cond:
+            deadline = self._clock() + limit
+            while not self._stopped and self._gen < target_gen:
+                remaining = deadline - self._clock()
+                if remaining <= 0:
+                    break
+                self._cond.wait(timeout=remaining)
+            return self._gen >= target_gen
+
+    def stop(self):
+        with self._cond:
+            self._stopped = True
+            self._cond.notify_all()
+
     def run_forever(self):
         while True:
-            self._tick()
-            self._wake.wait(timeout=self.args.interval)
-            self._wake.clear()
- 
+            with self._cond:
+                if self._stopped:
+                    return
+                self._wake_requested = False
+                self._polling = True
+            try:
+                self._tick()
+            finally:
+                with self._cond:
+                    if self._polling:
+                        self._polling = False
+                        self._cond.notify_all()
+                    if self._stopped:
+                        return
+                    if not self._wake_requested:
+                        self._cond.wait(timeout=self.args.interval)
+                    if self._stopped:
+                        return
+
     def _tick(self):
         if self.args.demo:
             providers = demo_providers()
@@ -415,8 +560,15 @@ class Poller:
  
             providers = [results[p] for p in wanted if p in results]
  
-        with self.lock:
+        with self._cond:
+            self._polling = False
             self.state = {"providers": providers, "fetched_at": int(time.time())}
+            self._gen += 1
+            if self._pending_refresh_gen is not None and self._gen >= self._pending_refresh_gen:
+                self._pending_refresh_gen = None
+                if self.cooldown_sec > 0:
+                    self._cooldown_until = self._clock() + self.cooldown_sec
+            self._cond.notify_all()
  
         for p in providers:
             if p["ok"]:
@@ -560,9 +712,9 @@ PAGE = r"""<!DOCTYPE html>
   }
   .panel{padding-bottom:6px}
   .panel + .panel{border-top:2px solid var(--line);padding-top:22px;margin-top:6px}
-  .phead{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:20px;gap:10px}
-  .pname{font-size:22px;letter-spacing:1px}
-  .psrc{font-size:8px;color:var(--dim);letter-spacing:1px;text-align:right;line-height:1.7;text-transform:uppercase}
+  .phead{display:flex;align-items:center;justify-content:space-between;min-height:28px;margin-bottom:20px;gap:10px}
+  .pname{font-size:22px;line-height:24px;letter-spacing:1px}
+  .psrc{font-size:8px;color:var(--dim);letter-spacing:1px;text-align:right;line-height:14px;text-transform:uppercase}
 
   /* 每個面板挑一組強調色,底下樣式只認 --acc-*,之後要加第三家也是照樣寫一段 */
   .panel{
@@ -581,7 +733,7 @@ PAGE = r"""<!DOCTYPE html>
   .row{margin-bottom:20px}
   .row:last-child{margin-bottom:6px}
   .row-top{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:9px}
-  .label{font-size:11px;color:var(--label);line-height:1.6}
+  .label{font-size:11px;color:var(--label);line-height:18px}
   /* min-width 是給數字滾動用的:2% 跑到 100% 位數會變,先卡住寬度才不會抖 */
   .pct{font-size:26px;line-height:1;min-width:4.4ch;text-align:right;
     text-shadow:0 0 10px rgba(var(--acc-glow), calc(var(--glow-a) * .5))}
@@ -599,12 +751,13 @@ PAGE = r"""<!DOCTYPE html>
     box-shadow:0 0 12px rgba(255,200,70,calc(var(--glow-a) * .6))}
   .fill.crit{background:linear-gradient(180deg,var(--crit-hi),var(--crit));
     box-shadow:0 0 12px rgba(255,90,90,calc(var(--glow-a) * .6))}
-  .reset{font-size:8px;color:var(--dim);margin-top:7px;letter-spacing:.5px}
-  .perr{font-size:9px;color:var(--err);line-height:2;padding:4px 0 10px}
+  /* 寫死像素行高,讓 8px 像素字與 10px 系統中文字佔用完全相同的垂直高度,切語言卡片不跳動 */
+  .reset{font-size:8px;line-height:14px;min-height:14px;color:var(--dim);margin-top:7px;letter-spacing:.5px}
+  .perr{font-size:9px;color:var(--err);line-height:20px;min-height:34px;padding:4px 0 10px}
 
   footer{
     display:flex;align-items:center;gap:9px;row-gap:12px;flex-wrap:wrap;
-    font-size:9px;color:var(--dim);
+    font-size:9px;line-height:16px;color:var(--dim);
     border-top:2px solid var(--line);padding-top:14px;margin-top:12px;
   }
   /* 呼吸燈。顏色走 --dot-c,所以正常/錯誤兩種狀態共用同一組 keyframes,
@@ -644,9 +797,11 @@ PAGE = r"""<!DOCTYPE html>
     display:inline-flex;align-items:center;justify-content:center;
   }
   #lang{font-family:var(--zh-font);font-size:12px;min-width:52px}
-  .btn:hover{color:var(--ink);border-color:var(--p1)}
-  .btn:active{transform:translateY(1px)}
+  #refresh{min-width:96px}
+  .btn:hover:not(:disabled){color:var(--ink);border-color:var(--p1)}
+  .btn:active:not(:disabled){transform:translateY(1px)}
   .btn.busy{color:var(--ink);border-color:var(--p1)}
+  .btn:disabled{opacity:.55;cursor:not-allowed}
 
   /* ── 動畫 ──────────────────────────────────────────────────
      全部集中在這一段。整段被 prefers-reduced-motion 關掉之後畫面只是
@@ -767,7 +922,8 @@ PAGE = r"""<!DOCTYPE html>
 const LANG_KEY = "ai-usage-lang";
 const I18N = {
   en: {
-    title:"AI Usage", usage:"Usage", refresh:"REFRESH", other:"中文",
+    title:"AI Usage", usage:"Usage", refresh:"REFRESH",
+    refreshWait:s => "REFRESH (" + s + "s)", other:"中文",
     switchTo:"切換為中文",
     connecting:"Connecting…", waiting:"Waiting for first poll…",
     noData:"No data yet", noServer:"Server not responding", unknown:"Unknown error",
@@ -791,7 +947,8 @@ const I18N = {
     },
   },
   zh: {
-    title:"AI 用量", usage:"用量", refresh:"重新整理", other:"EN",
+    title:"AI 用量", usage:"用量", refresh:"重新整理",
+    refreshWait:s => "重新整理 (" + s + "s)", other:"EN",
     switchTo:"Switch to English",
     connecting:"連線中…", waiting:"等待第一次輪詢…",
     noData:"尚未取得任何資料", noServer:"伺服器沒回應", unknown:"未知錯誤",
@@ -822,6 +979,21 @@ const I18N = {
 let LANG = document.documentElement.getAttribute("data-lang") === "zh" ? "zh" : "en";
 function L(){ return I18N[LANG]; }
 
+let last = null;
+let busyState = false;
+let cooldownUntil = 0;
+
+function cooldownLeft(){
+  return Math.max(0, Math.ceil((cooldownUntil - Date.now()) / 1000));
+}
+
+function syncRefreshBtn(){
+  const btn = document.getElementById("refresh");
+  const left = cooldownLeft();
+  btn.disabled = busyState || left > 0;
+  btn.textContent = left > 0 ? L().refreshWait(left) : L().refresh;
+}
+
 function applyLang(id, save){
   LANG = I18N[id] ? id : "en";
   const d = document.documentElement;
@@ -831,10 +1003,10 @@ function applyLang(id, save){
   const lb = document.getElementById("lang");
   lb.textContent = L().other;
   lb.title = L().switchTo;
-  document.getElementById("refresh").textContent = L().refresh;
+  syncRefreshBtn();
   if (save) { try { localStorage.setItem(LANG_KEY, LANG); } catch(e){} }
   // 已經有資料就整個重畫;沒有的話至少把狀態列換掉。
-  if (last) render(last);
+  if (last) render(last, false);
   else document.getElementById("status").textContent = L().connecting;
 }
 
@@ -924,8 +1096,6 @@ function errText(p){
   return p.error || L().unknown;
 }
  
-let last = null;
-
 // 每次輪詢都是整段 innerHTML 重寫,新元素一出生就是最終寬度,
 // 所以 .fill 的 transition 永遠不會播。這裡記住上一輪的數值,
 // 讓新的條子先長在舊位置,插進 DOM 之後再推到新值,過渡才跑得起來。
@@ -991,8 +1161,12 @@ function playBars(root){
 
 let firstRender = true;
 
-function render(data){
+function render(data, fromApi){
   last = data;
+  if (fromApi){
+    const rem = Math.max(0, Math.ceil(Number(data.refresh_cooldown_remaining) || 0));
+    cooldownUntil = rem > 0 ? Date.now() + rem * 1000 : 0;
+  }
   const providers = data.providers || [];
   const host = document.getElementById("panels");
   rowSeq = 0;
@@ -1014,6 +1188,7 @@ function render(data){
 }
  
 function tickAge(){
+  syncRefreshBtn();
   if (!last) return;
   const el = document.getElementById("status");
   if (!last.fetched_at){ el.textContent = L().waiting; return; }
@@ -1024,15 +1199,18 @@ function tickAge(){
 }
  
 function setBusy(b){
+  busyState = b;
   document.getElementById("dot").classList.toggle("busy", b);
   document.getElementById("refresh").classList.toggle("busy", b);
+  syncRefreshBtn();
 }
 
 async function load(force){
+  if (force && (busyState || cooldownLeft() > 0)) return;
   setBusy(true);
   try {
     const r = await fetch("/api/usage" + (force ? "?refresh=1" : ""));
-    render(await r.json());
+    render(await r.json(), true);
   } catch (e) {
     document.getElementById("status").textContent = L().noServer;
     document.getElementById("dot").classList.add("bad");
@@ -1065,13 +1243,14 @@ class Handler(BaseHTTPRequestHandler):
     page = PAGE.replace("__DEFAULT_THEME__", "midnight").encode()
  
     def do_GET(self):
-        if self.path.startswith("/api/usage"):
-            if "refresh=1" in self.path:
-                self.poller.refresh_now()
-                time.sleep(1.5)
+        parsed = urllib.parse.urlsplit(self.path)
+        if parsed.path == "/api/usage":
+            params = urllib.parse.parse_qs(parsed.query)
+            want_refresh = params.get("refresh", [""])[0].lower() in ("1", "true", "yes")
+            payload = self.poller.refresh() if want_refresh else self.poller.snapshot()
             self._send(200, "application/json; charset=utf-8",
-                       json.dumps(self.poller.snapshot()).encode())
-        elif self.path in ("/", "/index.html"):
+                       json.dumps(payload).encode())
+        elif parsed.path in ("/", "/index.html"):
             self._send(200, "text/html; charset=utf-8", self.page)
         else:
             self._send(404, "text/plain; charset=utf-8", b"not found")
@@ -1086,25 +1265,114 @@ class Handler(BaseHTTPRequestHandler):
  
     def log_message(self, *args):
         pass  # 不要洗版
- 
- 
-def main():
+
+
+# ═════════════════════════════════════════════ 背景常駐服務設定產生器
+
+def _resolve_service_executable(executable=None):
+    if executable is not None:
+        return [executable] if isinstance(executable, str) else list(executable)
+    argv0 = Path(sys.argv[0]) if sys.argv else None
+    if argv0 and argv0.name == "ai-usage-web" and argv0.exists():
+        return [str(argv0.resolve())]
+    found = shutil.which("ai-usage-web")
+    if found:
+        return [found]
+    return [sys.executable, str(Path(__file__).resolve())]
+
+
+def build_service_command(args, *, executable=None):
+    """組出給 systemd / launchd 用的啟動參數陣列(刻意不含明文 token 參數)。"""
+    cmd = _resolve_service_executable(executable)
+    cmd += ["--host", str(args.host), "--port", str(args.port), "--interval", str(args.interval)]
+    if getattr(args, "only", "both") != "both":
+        cmd += ["--only", args.only]
+    if getattr(args, "theme", "midnight") != "midnight":
+        cmd += ["--theme", args.theme]
+    cooldown = getattr(args, "refresh_cooldown", REFRESH_COOLDOWN_SEC)
+    if cooldown != REFRESH_COOLDOWN_SEC:
+        cmd += ["--refresh-cooldown", str(cooldown)]
+    if getattr(args, "demo", False):
+        cmd.append("--demo")
+    return cmd
+
+
+def render_systemd_unit(args, *, executable=None):
+    cmd = build_service_command(args, executable=executable)
+    exec_start = shlex.join(cmd)
+    return (
+        "[Unit]\n"
+        "Description=AI Usage Web — Local Claude & Codex Usage Dashboard\n"
+        "After=network-online.target\n"
+        "Wants=network-online.target\n"
+        "\n"
+        "[Service]\n"
+        "Type=simple\n"
+        f"ExecStart={exec_start}\n"
+        "Restart=on-failure\n"
+        "RestartSec=5\n"
+        "Environment=PYTHONUNBUFFERED=1\n"
+        "EnvironmentFile=-%h/.config/ai-usage-web/env\n"
+        "\n"
+        "[Install]\n"
+        "WantedBy=default.target\n"
+    )
+
+
+def render_launchd_plist(args, *, executable=None, log_dir="/tmp"):
+    cmd = build_service_command(args, executable=executable)
+    base = str(log_dir).rstrip("/") or "/tmp"
+    doc = {
+        "Label": LAUNCHD_LABEL,
+        "ProgramArguments": cmd,
+        "RunAtLoad": True,
+        "KeepAlive": True,
+        "EnvironmentVariables": {
+            "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+            "PYTHONUNBUFFERED": "1",
+        },
+        "StandardOutPath": f"{base}/ai-usage-web.out.log",
+        "StandardErrorPath": f"{base}/ai-usage-web.err.log",
+    }
+    return plistlib.dumps(doc, fmt=plistlib.FMT_XML, sort_keys=False).decode("utf-8")
+
+
+def build_arg_parser():
     ap = argparse.ArgumentParser(description="Claude + Codex 用量本機儀表板")
     ap.add_argument("--port", type=int, default=8787)
     ap.add_argument("--host", default="127.0.0.1",
                     help="預設只綁本機。想給同網段其他裝置看再改 0.0.0.0")
     ap.add_argument("--interval", type=int, default=120, help="輪詢秒數(預設 120)")
+    ap.add_argument("--refresh-cooldown", type=int, default=REFRESH_COOLDOWN_SEC,
+                    help=f"手動重新整理冷卻秒數(預設 {REFRESH_COOLDOWN_SEC})")
     ap.add_argument("--only", choices=["both", "claude", "codex"], default="both")
     ap.add_argument("--claude-token", default=None)
     ap.add_argument("--codex-token", default=None)
     ap.add_argument("--demo", action="store_true", help="用假資料,不打 API")
     ap.add_argument("--theme", default="midnight", choices=THEME_IDS,
                     help="開啟時的預設配色(瀏覽器記過的選擇優先)")
-    args = ap.parse_args()
- 
+    svc = ap.add_mutually_exclusive_group()
+    svc.add_argument("--print-systemd", action="store_true",
+                     help="輸出 Linux systemd --user 服務單元檔並結束")
+    svc.add_argument("--print-launchd", action="store_true",
+                     help="輸出 macOS launchd plist 設定檔並結束")
+    return ap
+
+
+def main(argv=None):
+    ap = build_arg_parser()
+    args = ap.parse_args(argv)
+
+    if args.print_systemd:
+        sys.stdout.write(render_systemd_unit(args))
+        return 0
+    if args.print_launchd:
+        sys.stdout.write(render_launchd_plist(args))
+        return 0
+
     poller = Poller(args)
     threading.Thread(target=poller.run_forever, daemon=True).start()
- 
+
     Handler.poller = poller
     Handler.page = PAGE.replace("__DEFAULT_THEME__", args.theme).encode()
     server = ThreadingHTTPServer((args.host, args.port), Handler)
@@ -1115,7 +1383,11 @@ def main():
         server.serve_forever()
     except KeyboardInterrupt:
         print("\n  bye")
- 
- 
+    finally:
+        poller.stop()
+        server.server_close()
+    return 0
+
+
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

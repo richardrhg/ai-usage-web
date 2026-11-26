@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  參考範本：macOS launchd 使用者背景常駐服務
+  詳細產生指令請見 docs/cli-guide.md（launchd 不會展開 ~，請確認 ProgramArguments 為絕對路徑）。
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.ai-usage-web</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/local/bin/ai-usage-web</string>
+		<string>--host</string>
+		<string>127.0.0.1</string>
+		<string>--port</string>
+		<string>8787</string>
+		<string>--interval</string>
+		<string>120</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+		<key>PYTHONUNBUFFERED</key>
+		<string>1</string>
+	</dict>
+	<key>StandardOutPath</key>
+	<string>/tmp/ai-usage-web.out.log</string>
+	<key>StandardErrorPath</key>
+	<string>/tmp/ai-usage-web.err.log</string>
+</dict>
+</plist>
